@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Whitelister</string>
+    <string name="accessibility_service_description">Whitelister uses accessibility service to modify Instagram feed and reels behavior. This allows hiding reels and filtering your feed to only show whitelisted accounts.</string>
+</resources>
