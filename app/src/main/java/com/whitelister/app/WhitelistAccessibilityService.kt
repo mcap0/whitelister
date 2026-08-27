@@ -52,10 +52,22 @@ class WhitelistAccessibilityService : AccessibilityService() {
         instance = this
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val metrics = DisplayMetrics()
-        windowManager.defaultDisplay?.getRealMetrics(metrics)
-        screenW = metrics.widthPixels
-        screenH = metrics.heightPixels
+        val bounds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            windowManager.currentWindowMetrics.bounds
+        } else {
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay?.getRealMetrics(metrics)
+            Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+        }
+        screenW = bounds.width()
+        screenH = bounds.height()
+        if (screenW <= 0 || screenH <= 0) {
+            val dm = resources.displayMetrics
+            screenW = dm.widthPixels
+            screenH = dm.heightPixels
+        }
+        Log.d(TAG, "Screen size: ${screenW}x$screenH")
 
         val info = AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -214,28 +226,43 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     private fun applyFeedFiltering() {
         if (!isFeedFiltering) {
+            Log.d(TAG, "Feed filtering: disabled in prefs")
             clearOverlays()
             return
         }
 
-        val root = getRootInActiveWindow() ?: run { clearOverlays(); return }
+        val root = getRootInActiveWindow() ?: run {
+            Log.d(TAG, "Feed filtering: no active window root")
+            clearOverlays()
+            return
+        }
 
         try {
-            if (!isOnHomeTab(root)) {
+            val home = isOnHomeTab(root)
+            Log.d(TAG, "Feed filtering: isOnHomeTab=$home")
+            if (!home) {
                 clearOverlays()
                 return
             }
-            val feed = findFeedScrollable(root) ?: run { clearOverlays(); return }
+            val feed = findFeedScrollable(root)
+            Log.d(TAG, "Feed filtering: feed scrollable=${feed != null}, childCount=${feed?.childCount ?: -1}")
+            if (feed == null) {
+                clearOverlays()
+                return
+            }
 
             val whitelist = PreferencesManager.getWhitelistedAccounts(this)
                 .map { it.lowercase() }
                 .toSet()
+            Log.d(TAG, "Feed filtering: whitelist size=${whitelist.size}")
 
             val blocked = mutableListOf<Rect>()
+            var scanned = 0
             for (i in 0 until feed.childCount) {
                 val child = feed.getChild(i) ?: continue
                 val username = extractUsername(child)
                 if (username != null) {
+                    scanned++
                     val b = Rect()
                     child.getBoundsInScreen(b)
                     if (b.height() > screenH * FEED_CARD_MIN_RATIO) {
@@ -243,13 +270,14 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         if (whitelist.contains(norm)) {
                             Log.d(TAG, "Whitelisted feed post: @$norm")
                         } else {
-                            Log.d(TAG, "Blocked feed post: @$norm")
+                            Log.d(TAG, "Blocked feed post: @$norm bounds=$b")
                             blocked.add(b)
                         }
                     }
                 }
                 child.recycle()
             }
+            Log.d(TAG, "Feed filtering: scanned=$scanned blocked=${blocked.size}")
             feed.recycle()
 
             val unique = dedupeRects(blocked)
@@ -257,6 +285,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 for (rect in unique) addOverlay(rect)
             }
+            Log.d(TAG, "Feed filtering: overlays added=${unique.size}")
 
             if (unique.isNotEmpty() && FEED_AUTOSCROLL_ENABLED) {
                 maybeAutoScroll()
@@ -269,7 +298,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun isOnHomeTab(root: AccessibilityNodeInfo): Boolean {
-        if (detectStoriesTray(root)) return true
+        val tray = detectStoriesTray(root)
+        if (tray) {
+            Log.d(TAG, "isOnHomeTab: Stories tray detected -> Home")
+            return true
+        }
         var homeSelected = false
         var otherSelected = false
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
@@ -292,7 +325,14 @@ class WhitelistAccessibilityService : AccessibilityService() {
             }
         }
         visit(root, 0)
-        return homeSelected && !otherSelected
+        return if (otherSelected) {
+            Log.d(TAG, "isOnHomeTab: other tab selected -> NOT home")
+            false
+        } else {
+            // Home not contradicted: if Home explicitly selected -> true, else allow (unknown)
+            Log.d(TAG, "isOnHomeTab: homeSelected=$homeSelected otherSelected=$otherSelected -> allow")
+            true
+        }
     }
 
     private fun detectStoriesTray(root: AccessibilityNodeInfo): Boolean {
@@ -302,16 +342,16 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (node.isScrollable) {
                 val b = Rect()
                 node.getBoundsInScreen(b)
-                if (b.top < screenH * 0.25f && b.height() < screenH * 0.2f) {
+                if (b.top < screenH * 0.4f && b.height() < screenH * 0.3f) {
                     var smallAvatars = 0
                     for (i in 0 until node.childCount) {
                         val c = node.getChild(i) ?: continue
                         val cb = Rect()
                         c.getBoundsInScreen(cb)
-                        if (cb.height() < screenH * 0.15f) smallAvatars++
+                        if (cb.height() < screenH * 0.2f) smallAvatars++
                         c.recycle()
                     }
-                    if (smallAvatars >= 3) found = true
+                    if (smallAvatars >= 2) found = true
                     return
                 }
             }
@@ -326,10 +366,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun findFeedScrollable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var result: AccessibilityNodeInfo? = null
+        var best: AccessibilityNodeInfo? = null
+        var bestUsernames = 0
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
-            if (result != null || depth > 20) return
+            if (depth > 20) return
             if (node.isScrollable) {
+                // Skip the tab ViewPager: its direct children are full-screen pages.
                 var fullScreenChild = false
                 for (i in 0 until node.childCount) {
                     val c = node.getChild(i) ?: continue
@@ -340,20 +382,17 @@ class WhitelistAccessibilityService : AccessibilityService() {
                     }
                     c.recycle()
                 }
-                if (!fullScreenChild && node.childCount >= 2) {
-                    val a = Rect()
-                    val b = Rect()
-                    val c1 = node.getChild(0)
-                    val c2 = node.getChild(1)
-                    c1?.getBoundsInScreen(a)
-                    c2?.getBoundsInScreen(b)
-                    c1?.recycle()
-                    c2?.recycle()
-                    val vertical = a.top < b.top &&
-                            kotlin.math.abs(a.left - b.left) < screenW * 0.2f
-                    if (vertical) {
-                        result = AccessibilityNodeInfo.obtain(node)
-                        return
+                if (!fullScreenChild && node.childCount >= 1) {
+                    // Count how many direct children expose a username (post cards).
+                    var usernames = 0
+                    for (i in 0 until node.childCount) {
+                        val c = node.getChild(i) ?: continue
+                        if (extractUsername(c) != null) usernames++
+                        c.recycle()
+                    }
+                    if (usernames > bestUsernames) {
+                        bestUsernames = usernames
+                        best = AccessibilityNodeInfo.obtain(node)
                     }
                 }
             }
@@ -364,7 +403,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
             }
         }
         visit(root, 0)
-        return result
+        Log.d(TAG, "findFeedScrollable: best usernames=$bestUsernames")
+        return best
     }
 
     private fun extractUsername(node: AccessibilityNodeInfo): String? {
