@@ -51,11 +51,10 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                detectReelsTab(event)
-            }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                if (reelsEnabled && isReelsTab) {
-                    blockReels()
+                if (reelsEnabled) {
+                    detectReelsTab()
+                } else {
+                    isReelsTab = false
                 }
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
@@ -66,35 +65,32 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun detectReelsTab(event: AccessibilityEvent) {
+    private fun detectReelsTab() {
         isReelsTab = false
 
         try {
             val rootNode = getRootInActiveWindow() ?: return
-            isReelsTab = findReelsView(rootNode, 0)
+            isReelsTab = checkClipsTabSelected(rootNode, 0)
             rootNode.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Error detecting reels tab", e)
         }
     }
 
-    private fun findReelsView(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 10) return false
+    private fun checkClipsTabSelected(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 15) return false
 
         val viewId = node.viewIdResourceName
-        if (viewId != null) {
-            if (viewId.contains("clips_tab") ||
-                viewId.contains("clips_viewer") ||
-                viewId.contains("reel_viewer") ||
-                viewId.contains("clips_video_container")
-            ) {
+        if (viewId != null && viewId.contains("clips_tab")) {
+            if (node.isSelected) {
+                Log.d(TAG, "Reels TAB detected: $viewId isSelected=true")
                 return true
             }
         }
 
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (findReelsView(child, depth + 1)) {
+            if (checkClipsTabSelected(child, depth + 1)) {
                 child.recycle()
                 return true
             }
@@ -112,7 +108,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         handler.post {
             try {
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                Log.d(TAG, "Reels blocked - performed BACK action")
+                Log.d(TAG, "Reels blocked - BACK action performed")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to perform back action", e)
             }
