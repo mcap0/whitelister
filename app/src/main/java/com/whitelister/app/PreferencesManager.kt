@@ -7,6 +7,7 @@ import org.json.JSONArray
 object PreferencesManager {
     private const val PREFS_NAME = "whitelister_prefs"
     private const val KEY_REELS_BLOCKING = "reels_blocking_enabled"
+    private const val KEY_FEED_FILTERING = "feed_filtering_enabled"
     private const val KEY_WHITELISTED_ACCOUNTS = "whitelisted_accounts"
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -19,6 +20,14 @@ object PreferencesManager {
 
     fun setReelsBlockingEnabled(context: Context, enabled: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_REELS_BLOCKING, enabled).apply()
+    }
+
+    fun isFeedFilteringEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_FEED_FILTERING, false)
+    }
+
+    fun setFeedFilteringEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_FEED_FILTERING, enabled).apply()
     }
 
     fun getWhitelistedAccounts(context: Context): Set<String> {

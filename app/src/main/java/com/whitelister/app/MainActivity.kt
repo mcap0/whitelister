@@ -51,6 +51,9 @@ fun WhitelisterScreen() {
     var reelsBlockingEnabled by remember {
         mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context))
     }
+    var feedFilteringEnabled by remember {
+        mutableStateOf(PreferencesManager.isFeedFilteringEnabled(context))
+    }
     var whitelistedAccounts by remember {
         mutableStateOf(PreferencesManager.getWhitelistedAccounts(context))
     }
@@ -63,6 +66,7 @@ fun WhitelisterScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
                 reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
+                feedFilteringEnabled = PreferencesManager.isFeedFilteringEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -160,31 +164,29 @@ fun WhitelisterScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text("Whitelist Feed", style = MaterialTheme.typography.bodyLarge)
-                                SuggestionChip(
-                                    onClick = {},
-                                    label = { Text("In Progress", style = MaterialTheme.typography.labelSmall) },
-                                    icon = {
-                                        Icon(
-                                            Icons.Default.Info,
-                                            contentDescription = "In progress",
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
-                                )
-                            }
+                            Text("Whitelist Feed", style = MaterialTheme.typography.bodyLarge)
                             Text(
                                 "Only show posts from these accounts",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
+                        Switch(
+                            checked = feedFilteringEnabled,
+                            onCheckedChange = { enabled ->
+                                feedFilteringEnabled = enabled
+                                PreferencesManager.setFeedFilteringEnabled(context, enabled)
+                            },
+                            enabled = isAccessibilityEnabled
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
                         Button(
                             onClick = { showAddAccountDialog = true },
-                            enabled = false
+                            enabled = isAccessibilityEnabled && feedFilteringEnabled
                         ) {
                             Text("Add")
                         }
@@ -205,7 +207,7 @@ fun WhitelisterScreen() {
                                     whitelistedAccounts = whitelistedAccounts - account
                                     PreferencesManager.setWhitelistedAccounts(context, whitelistedAccounts)
                                 },
-                                enabled = false
+                                enabled = isAccessibilityEnabled
                             ) {
                                 Text("Remove")
                             }
