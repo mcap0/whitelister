@@ -195,11 +195,45 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     // ---- Lock Home feed: keep the user at the top (Stories only) on the For You tab ----
-    // Bounces by scrolling the feed UP (ACTION_SCROLL_BACKWARD) on the feed
-    // scrollable. This avoids re-selecting the bottom-nav Home tab, which would
-    // make Instagram pull-to-refresh and loop. Home-tap is only a fallback if the
-    // scroll action is rejected. Detection keys off the Home button's isSelected
-    // state (not fragile UI text).
+    // Bounces by pressing the bottom-nav Home button (which on Instagram natively
+    // scrolls the feed back to the top — a reload is accepted). The infinite
+    // reload loop is avoided by ONLY tapping Home when the feed is genuinely
+    // scrolled DOWN. We detect "at top" via the Stories tray: it is visible at the
+    // top of the screen when the feed is at the top, and scrolls off when you go
+    // down. Tapping Home while already at the top is what triggered the refresh
+    // loop, so we skip the tap in that state.
+
+    private fun getScreenWidth(): Int {
+        val metrics = DisplayMetrics()
+        getSystemService(android.view.WindowManager::class.java)?.defaultDisplay?.getMetrics(metrics)
+        return metrics.widthPixels
+    }
+
+    private fun findStoriesTray(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val screenW = getScreenWidth()
+        var best: AccessibilityNodeInfo? = null
+        fun scan(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > 20 || best != null) return
+            if (node.isScrollable) {
+                val b = Rect()
+                node.getBoundsInScreen(b)
+                val w = b.width()
+                val h = b.height()
+                val isHorizontal = w > h
+                val nearTop = b.top in 0..400
+                val wide = w > screenW * 0.5
+                if (isHorizontal && nearTop && wide) {
+                    best = node
+                    return
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { c -> scan(c, depth + 1); c.recycle() }
+            }
+        }
+        scan(root, 0)
+        return best
+    }
 
     private fun findFeedScrollable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         var best: AccessibilityNodeInfo? = null
@@ -223,6 +257,32 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         scan(root, 0)
         return best
+    }
+
+    // True when the feed is already at the top (so a Home tap would only refresh).
+    private fun isFeedAtTop(root: AccessibilityNodeInfo): Boolean {
+        val tray = findStoriesTray(root)
+        if (tray != null) {
+            val b = Rect()
+            tray.getBoundsInScreen(b)
+            val visible = b.bottom > 0
+            tray.recycle()
+            return visible
+        }
+        // Fallback: a feed child sitting at/near the top of the screen means at top.
+        val feed = findFeedScrollable(root)
+        val child = feed?.getChild(0)
+        if (child != null) {
+            val b = Rect()
+            child.getBoundsInScreen(b)
+            val top = b.top
+            feed?.recycle()
+            child.recycle()
+            return top >= 80
+        }
+        feed?.recycle()
+        // Can't tell — be conservative and treat as at top to avoid a refresh loop.
+        return true
     }
 
     private fun applyBlockHomeFeed() {
@@ -252,16 +312,16 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 homeBtn.recycle()
                 return
             }
-            lastBlockHomeTime = now
-            val feed = findFeedScrollable(root)
-            val scrolled = feed?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) ?: false
-            if (scrolled) {
-                Log.d(TAG, "LockHome: scrolled feed backward (no reload)")
-            } else {
-                homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                Log.d(TAG, "LockHome: scroll-back rejected -> tapped Home (fallback)")
+            // Only bounce when actually scrolled down. Tapping Home at the top is
+            // what caused the infinite pull-to-refresh loop, so skip it here.
+            if (isFeedAtTop(root)) {
+                Log.d(TAG, "LockHome: at top (Stories tray visible) -> skip, avoid reload loop")
+                homeBtn.recycle()
+                return
             }
-            feed?.recycle()
+            lastBlockHomeTime = now
+            homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Log.d(TAG, "LockHome: pressed Home -> bounce to top (reload accepted)")
             homeBtn.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Error in block home feed", e)
