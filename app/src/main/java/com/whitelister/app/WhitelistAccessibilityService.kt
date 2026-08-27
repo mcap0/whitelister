@@ -17,7 +17,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val REELS_COOLDOWN_MS = 2000L
         private const val CONTENT_DETECT_THROTTLE_MS = 500L
         private const val FULLSCREEN_RATIO = 0.7f
-        private const val BLOCK_HOME_THROTTLE_MS = 500L
+        private const val BLOCK_HOME_THROTTLE_MS = 800L
+        private const val REELS_GRACE_MS = 1000L
 
         var isRunning = false
             private set
@@ -31,6 +32,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var lastContentDetectTime = 0L
     private var lastBlockHomeTime = 0L
     private var isInReelsViewer = false
+    private var reelsEnteredAt = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -84,7 +86,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         }
                     }
                     if (isInReelsViewer) {
-                        blockReels()
+                        val sinceEnter = System.currentTimeMillis() - reelsEnteredAt
+                        if (sinceEnter >= REELS_GRACE_MS) {
+                            blockReels()
+                        } else {
+                            Log.d(TAG, "Reels: within grace ($sinceEnter ms), ignore scroll")
+                        }
                     }
                 }
                 if (blockHomeEnabled) applyBlockHomeFeed()
@@ -93,6 +100,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun detectReelsViewer() {
+        val wasInViewer = isInReelsViewer
         isInReelsViewer = false
 
         try {
@@ -100,6 +108,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
             isInReelsViewer = isReelsTabSelected(rootNode, 0) ||
                     isFullscreenReelViewer(rootNode, 0)
             rootNode.recycle()
+            // On entering the viewer, arm the grace period so the scroll event
+            // emitted by simply opening a reel doesn't immediately back out.
+            if (isInReelsViewer && !wasInViewer) {
+                reelsEnteredAt = System.currentTimeMillis()
+                Log.d(TAG, "Reels viewer entered; grace until ${reelsEnteredAt + REELS_GRACE_MS}")
+            }
             Log.d(TAG, "Reels viewer detection: $isInReelsViewer")
         } catch (e: Exception) {
             Log.e(TAG, "Error detecting reels viewer", e)
@@ -210,12 +224,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "LockHome: on Favorites, skip")
                 return
             }
-            // Only bounce if the feed is actually scrolled down. Tapping Home while
-            // already at the top would reload the feed and loop when idle.
-            if (isFeedAtTop(root)) {
-                Log.d(TAG, "LockHome: already at top, skip")
-                return
-            }
             lastBlockHomeTime = now
             homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             Log.d(TAG, "LockHome: pressed Home -> bounce to top")
@@ -264,53 +272,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         scan(root, 0)
         return found
-    }
-
-    private fun isVertical(node: AccessibilityNodeInfo): Boolean {
-        if (node.childCount < 2) return true
-        val a = Rect()
-        val b = Rect()
-        val c1 = node.getChild(0)
-        val c2 = node.getChild(1)
-        c1?.getBoundsInScreen(a)
-        c2?.getBoundsInScreen(b)
-        c1?.recycle()
-        c2?.recycle()
-        return a.top < b.top && kotlin.math.abs(a.left - b.left) < 200
-    }
-
-    private fun findMainFeedScrollable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var best: AccessibilityNodeInfo? = null
-        var bestH = 0
-        fun scan(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > 20) return
-            if (node.isScrollable && isVertical(node)) {
-                val b = Rect()
-                node.getBoundsInScreen(b)
-                val h = b.height()
-                if (h > bestH) {
-                    bestH = h
-                    best = node
-                }
-            }
-            for (i in 0 until node.childCount) {
-                val c = node.getChild(i) ?: continue
-                scan(c, depth + 1)
-                c.recycle()
-            }
-        }
-        scan(root, 0)
-        return best
-    }
-
-    private fun isFeedAtTop(root: AccessibilityNodeInfo): Boolean {
-        val feed = findMainFeedScrollable(root) ?: return true
-        val child = feed.getChild(0) ?: return true
-        val b = Rect()
-        child.getBoundsInScreen(b)
-        child.recycle()
-        // At (or very near) the top when the first item's top is still on/above screen top.
-        return b.top >= -8
     }
 
     override fun onInterrupt() {
