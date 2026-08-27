@@ -54,4 +54,10 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## License
 
-Open source — see [LICENSE](LICENSE) for details.
+Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** with an
+additional **non-commercial restriction**. Derivatives must remain open source
+under the same AGPL-3.0 license and may not be used for commercial purposes,
+except by the copyright holder (mcap0), who reserves the right to distribute
+the app commercially (e.g., on the Google Play Store for a price).
+
+See [LICENSE](LICENSE) for the full text and the additional restriction.
