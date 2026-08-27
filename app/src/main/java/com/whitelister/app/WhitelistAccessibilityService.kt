@@ -16,7 +16,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val TAG = "WhitelistService"
         private const val REELS_COOLDOWN_MS = 2000L
         private const val CONTENT_DETECT_THROTTLE_MS = 500L
-        private const val FULLSCREEN_RATIO = 0.85f
+        private const val FULLSCREEN_RATIO = 0.7f
 
         var isRunning = false
             private set
@@ -72,8 +72,17 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                if (reelsEnabled && isInReelsViewer) {
-                    blockReels()
+                if (reelsEnabled) {
+                    if (!isInReelsViewer) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastContentDetectTime >= CONTENT_DETECT_THROTTLE_MS) {
+                            lastContentDetectTime = now
+                            detectReelsViewer()
+                        }
+                    }
+                    if (isInReelsViewer) {
+                        blockReels()
+                    }
                 }
             }
         }
@@ -117,9 +126,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         val viewId = node.viewIdResourceName
         if (viewId != null) {
-            val isReelContainer = viewId.contains("clips_viewer_view_pager") ||
-                    viewId.contains("reel_viewer") ||
-                    viewId.contains("clips_video_container")
+            val isReelContainer = viewId.contains("clips") || viewId.contains("reel")
             if (isReelContainer && isNodeFullscreen(node)) {
                 Log.d(TAG, "Fullscreen reel viewer detected: $viewId")
                 return true
