@@ -10,8 +10,8 @@ object PreferencesManager {
     private const val KEY_WHITELISTED_ACCOUNTS = "whitelisted_accounts"
     private const val KEY_FEED_FILTERING = "feed_filtering_enabled"
     private const val KEY_HIDE_PROMOTED = "hide_promoted_enabled"
-    private const val KEY_AUTOPLAY_OFF = "autoplay_off_enabled"
-    private const val KEY_INFINITE_SCROLL_OFF = "infinite_scroll_off_enabled"
+    private const val KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"
+    private const val KEY_AUTO_OPEN_FAVORITES = "auto_open_favorites_enabled"
     private const val KEY_CONSENT_ACCEPTED = "consent_accepted"
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -58,19 +58,19 @@ object PreferencesManager {
         getPrefs(context).edit().putBoolean(KEY_FEED_FILTERING, enabled).apply()
     }
 
-    fun isAutoplayOffEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_AUTOPLAY_OFF, false)
+    fun isBlockHomeFeedEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_BLOCK_HOME_FEED, false)
     }
 
-    fun setAutoplayOffEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_AUTOPLAY_OFF, enabled).apply()
+    fun setBlockHomeFeedEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_BLOCK_HOME_FEED, enabled).apply()
     }
 
-    fun isInfiniteScrollOffEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_INFINITE_SCROLL_OFF, false)
+    fun isAutoOpenFavoritesEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_AUTO_OPEN_FAVORITES, false)
     }
 
-    fun setInfiniteScrollOffEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_INFINITE_SCROLL_OFF, enabled).apply()
+    fun setAutoOpenFavoritesEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_AUTO_OPEN_FAVORITES, enabled).apply()
     }
 }

@@ -146,11 +146,11 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
     var reelsBlockingEnabled by remember {
         mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context))
     }
-    var autoplayOffEnabled by remember {
-        mutableStateOf(PreferencesManager.isAutoplayOffEnabled(context))
+    var blockHomeFeedEnabled by remember {
+        mutableStateOf(PreferencesManager.isBlockHomeFeedEnabled(context))
     }
-    var infiniteScrollOffEnabled by remember {
-        mutableStateOf(PreferencesManager.isInfiniteScrollOffEnabled(context))
+    var autoOpenFavoritesEnabled by remember {
+        mutableStateOf(PreferencesManager.isAutoOpenFavoritesEnabled(context))
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -159,8 +159,8 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
                 reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
-                autoplayOffEnabled = PreferencesManager.isAutoplayOffEnabled(context)
-                infiniteScrollOffEnabled = PreferencesManager.isInfiniteScrollOffEnabled(context)
+                blockHomeFeedEnabled = PreferencesManager.isBlockHomeFeedEnabled(context)
+                autoOpenFavoritesEnabled = PreferencesManager.isAutoOpenFavoritesEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -258,7 +258,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
 
                     HorizontalDivider()
 
-                    // Disable Autoplay Toggle
+                    // Lock Home Feed Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -266,19 +266,19 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                getString(context, R.string.autoplay_off_title),
+                                getString(context, R.string.block_home_feed_title),
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                getString(context, R.string.autoplay_off_summary),
+                                getString(context, R.string.block_home_feed_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                         Switch(
-                            checked = autoplayOffEnabled,
+                            checked = blockHomeFeedEnabled,
                             onCheckedChange = { enabled ->
-                                autoplayOffEnabled = enabled
-                                PreferencesManager.setAutoplayOffEnabled(context, enabled)
+                                blockHomeFeedEnabled = enabled
+                                PreferencesManager.setBlockHomeFeedEnabled(context, enabled)
                             },
                             enabled = isAccessibilityEnabled
                         )
@@ -286,7 +286,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
 
                     HorizontalDivider()
 
-                    // Limit Infinite Scroll Toggle
+                    // Open Favorites on launch Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -294,19 +294,19 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                getString(context, R.string.infinite_scroll_off_title),
+                                getString(context, R.string.auto_open_favorites_title),
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                getString(context, R.string.infinite_scroll_off_summary),
+                                getString(context, R.string.auto_open_favorites_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                         Switch(
-                            checked = infiniteScrollOffEnabled,
+                            checked = autoOpenFavoritesEnabled,
                             onCheckedChange = { enabled ->
-                                infiniteScrollOffEnabled = enabled
-                                PreferencesManager.setInfiniteScrollOffEnabled(context, enabled)
+                                autoOpenFavoritesEnabled = enabled
+                                PreferencesManager.setAutoOpenFavoritesEnabled(context, enabled)
                             },
                             enabled = isAccessibilityEnabled
                         )
