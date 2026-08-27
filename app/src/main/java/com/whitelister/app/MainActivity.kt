@@ -149,9 +149,6 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
     var blockHomeFeedEnabled by remember {
         mutableStateOf(PreferencesManager.isBlockHomeFeedEnabled(context))
     }
-    var autoOpenFavoritesEnabled by remember {
-        mutableStateOf(PreferencesManager.isAutoOpenFavoritesEnabled(context))
-    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -160,7 +157,6 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
                 reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
                 blockHomeFeedEnabled = PreferencesManager.isBlockHomeFeedEnabled(context)
-                autoOpenFavoritesEnabled = PreferencesManager.isAutoOpenFavoritesEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -286,31 +282,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
 
                     HorizontalDivider()
 
-                    // Open Favorites on launch Toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                getString(context, R.string.auto_open_favorites_title),
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                getString(context, R.string.auto_open_favorites_summary),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Switch(
-                            checked = autoOpenFavoritesEnabled,
-                            onCheckedChange = { enabled ->
-                                autoOpenFavoritesEnabled = enabled
-                                PreferencesManager.setAutoOpenFavoritesEnabled(context, enabled)
-                            },
-                            enabled = isAccessibilityEnabled
-                        )
-                    }
+                    // (Auto-Open Favorites removed; only Lock Home Feed is provided)
                 }
             }
         }

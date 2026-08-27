@@ -11,7 +11,6 @@ object PreferencesManager {
     private const val KEY_FEED_FILTERING = "feed_filtering_enabled"
     private const val KEY_HIDE_PROMOTED = "hide_promoted_enabled"
     private const val KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"
-    private const val KEY_AUTO_OPEN_FAVORITES = "auto_open_favorites_enabled"
     private const val KEY_CONSENT_ACCEPTED = "consent_accepted"
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -64,13 +63,5 @@ object PreferencesManager {
 
     fun setBlockHomeFeedEnabled(context: Context, enabled: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_BLOCK_HOME_FEED, enabled).apply()
-    }
-
-    fun isAutoOpenFavoritesEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_AUTO_OPEN_FAVORITES, false)
-    }
-
-    fun setAutoOpenFavoritesEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_AUTO_OPEN_FAVORITES, enabled).apply()
     }
 }

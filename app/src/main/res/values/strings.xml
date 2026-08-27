@@ -14,6 +14,4 @@
 
     <string name="block_home_feed_title">Lock Home Feed (Stories only)</string>
     <string name="block_home_feed_summary">On For You, keeps you at the top so only Stories show; scroll is bounced back</string>
-    <string name="auto_open_favorites_title">Open Favorites on launch</string>
-    <string name="auto_open_favorites_summary">Switches the home feed to your Favorites when Instagram opens</string>
 </resources>
