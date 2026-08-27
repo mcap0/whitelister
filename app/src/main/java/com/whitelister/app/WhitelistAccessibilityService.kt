@@ -17,27 +17,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val REELS_COOLDOWN_MS = 2000L
         private const val CONTENT_DETECT_THROTTLE_MS = 500L
         private const val FULLSCREEN_RATIO = 0.7f
-
-        private const val HIDE_THROTTLE_MS = 1200L
-        private const val HIDE_ACTION_DELAY_MS = 400L
-        private const val HIDE_COOLDOWN_MS = 5000L
-
-        private val PROMOTED_KEYWORDS = setOf(
-            "sponsored", "patrocinato", "paid partnership", "publicità", "promoted"
-        )
-        private val SUGGESTED_KEYWORDS = setOf(
-            "suggested for you", "consigliato per te", "ti consigliamo", "suggested post"
-        )
-        private val REELS_ID_HINTS = listOf("reel", "clips_video", "reel_viewer", "clips_viewer")
-        private val MENU_KEYWORDS = setOf(
-            "hide ad", "nascondi pubblicità", "not interested", "non mi interessa", "hide"
-        )
-        private val KEBAB_TEXT_HINTS = setOf(
-            "more options", "opzioni", "altro", "menu"
-        )
-        private val KEBAB_ID_HINTS = listOf(
-            "action_button", "overflow", "menu_button", "button_more"
-        )
+        private const val SKIP_THROTTLE_MS = 1500L
+        private val REEL_ID_HINTS = listOf("reel", "clips_video", "reel_viewer", "clips_viewer")
 
         var isRunning = false
             private set
@@ -49,9 +30,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastReelsBlockTime = 0L
     private var lastContentDetectTime = 0L
+    private var lastSkipTime = 0L
     private var isInReelsViewer = false
-    private var lastHideTime = 0L
-    private val actedHashes = mutableMapOf<String, Long>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -76,7 +56,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (event.packageName != "com.instagram.android") return
 
         val reelsEnabled = PreferencesManager.isReelsBlockingEnabled(this)
-        val hideEnabled = PreferencesManager.isHidePromotedEnabled(this)
+        val skipEnabled = PreferencesManager.isSkipFeedReelsEnabled(this)
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -85,7 +65,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 } else {
                     isInReelsViewer = false
                 }
-                if (hideEnabled) applyHidePromoted()
+                if (skipEnabled) applySkipFeedReels()
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (reelsEnabled) {
@@ -95,7 +75,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         detectReelsViewer()
                     }
                 }
-                if (hideEnabled) applyHidePromoted()
+                if (skipEnabled) applySkipFeedReels()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (reelsEnabled) {
@@ -110,7 +90,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         blockReels()
                     }
                 }
-                if (hideEnabled) applyHidePromoted()
+                if (skipEnabled) applySkipFeedReels()
             }
         }
     }
@@ -203,41 +183,37 @@ class WhitelistAccessibilityService : AccessibilityService() {
         isInReelsViewer = false
     }
 
-    // ---- Hide Sponsored & Suggested (+ inline Reels) ----
+    // ---- Skip Reels that appear inline in the feed ----
 
-    private fun applyHidePromoted() {
-        if (!PreferencesManager.isHidePromotedEnabled(this)) return
+    private fun applySkipFeedReels() {
+        if (!PreferencesManager.isSkipFeedReelsEnabled(this)) return
         val now = System.currentTimeMillis()
-        if (now - lastHideTime < HIDE_THROTTLE_MS) return
-        lastHideTime = now
+        if (now - lastSkipTime < SKIP_THROTTLE_MS) return
+        lastSkipTime = now
 
         val root = getRootInActiveWindow() ?: return
         try {
-            var targetKebab: AccessibilityNodeInfo? = null
-            var targetKey: String? = null
+            var feedScrollable: AccessibilityNodeInfo? = null
 
             fun scan(node: AccessibilityNodeInfo, depth: Int) {
-                if (targetKebab != null || depth > 18) return
-                if (nodeHasLabel(node)) {
-                    var a: AccessibilityNodeInfo? = node
-                    for (step in 0..6) {
-                        a ?: break
-                        val k = findKebab(a)
-                        if (k != null) {
-                            val key = hashKey(k)
-                            val last = actedHashes[key] ?: 0L
-                            if (now - last >= HIDE_COOLDOWN_MS) {
-                                targetKebab = k
-                                targetKey = key
-                            } else {
-                                k.recycle()
+                if (feedScrollable != null || depth > 18) return
+                val id = node.viewIdResourceName?.lowercase()
+                if (id != null) {
+                    for (h in REEL_ID_HINTS) {
+                        if (id.contains(h) && !isNodeFullscreen(node)) {
+                            // Inline feed reel: find nearest vertical scrollable ancestor
+                            var a: AccessibilityNodeInfo? = node
+                            for (step in 0..8) {
+                                a = a?.parent ?: break
+                                if (a.isScrollable && isVertical(a)) {
+                                    feedScrollable = AccessibilityNodeInfo.obtain(a)
+                                    return
+                                }
                             }
                             break
                         }
-                        a = a.parent
                     }
                 }
-                if (targetKebab != null) return
                 for (i in 0 until node.childCount) {
                     val c = node.getChild(i) ?: continue
                     scan(c, depth + 1)
@@ -246,104 +222,30 @@ class WhitelistAccessibilityService : AccessibilityService() {
             }
             scan(root, 0)
 
-            val kebab = targetKebab
-            val key = targetKey
-            if (kebab != null && key != null) {
-                actedHashes[key] = now
-                kebab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                Log.d(TAG, "Hide: opened menu for promoted/suggested/reel card")
-                handler.postDelayed({
-                    try {
-                        val r2 = getRootInActiveWindow() ?: return@postDelayed
-                        val item = findMenuAction(r2)
-                        if (item != null) {
-                            item.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            item.recycle()
-                            Log.d(TAG, "Hide: selected hide/not-interested action")
-                        } else {
-                            Log.d(TAG, "Hide: no matching menu item found")
-                        }
-                        r2.recycle()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Hide menu click failed", e)
-                    }
-                }, HIDE_ACTION_DELAY_MS)
-                kebab.recycle()
+            val fs = feedScrollable
+            if (fs != null) {
+                fs.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                Log.d(TAG, "Skip: scrolled past feed reel")
+                fs.recycle()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in hide promoted", e)
+            Log.e(TAG, "Error in skip feed reels", e)
         } finally {
             root.recycle()
-            val cut = System.currentTimeMillis()
-            val it = actedHashes.entries.iterator()
-            while (it.hasNext()) {
-                if (cut - it.next().value > HIDE_COOLDOWN_MS) it.remove()
-            }
         }
     }
 
-    private fun nodeHasLabel(node: AccessibilityNodeInfo): Boolean {
-        val t = node.text?.toString()?.lowercase()
-        val cd = node.contentDescription?.toString()?.lowercase()
-        val id = node.viewIdResourceName?.lowercase()
-        for (kw in PROMOTED_KEYWORDS) {
-            if (t != null && t.contains(kw)) return true
-            if (cd != null && cd.contains(kw)) return true
-        }
-        for (kw in SUGGESTED_KEYWORDS) {
-            if (t != null && t.contains(kw)) return true
-            if (cd != null && cd.contains(kw)) return true
-        }
-        if (id != null) {
-            for (h in REELS_ID_HINTS) if (id.contains(h)) return true
-        }
-        return false
-    }
-
-    private fun findKebab(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        if (node.isClickable) {
-            val cd = node.contentDescription?.toString()?.lowercase()
-            val id = node.viewIdResourceName?.lowercase() ?: ""
-            if (cd != null) {
-                for (h in KEBAB_TEXT_HINTS) if (cd.contains(h)) {
-                    return AccessibilityNodeInfo.obtain(node)
-                }
-            }
-            if (id.contains("action_button") || id.contains("overflow") ||
-                id.contains("menu_button") || id.contains("button_more")
-            ) {
-                return AccessibilityNodeInfo.obtain(node)
-            }
-        }
-        for (i in 0 until node.childCount) {
-            val c = node.getChild(i) ?: continue
-            val found = findKebab(c)
-            c.recycle()
-            if (found != null) return found
-        }
-        return null
-    }
-
-    private fun findMenuAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val t = node.text?.toString()?.lowercase()
-        if (node.isClickable && t != null) {
-            for (kw in MENU_KEYWORDS) {
-                if (t.contains(kw)) return AccessibilityNodeInfo.obtain(node)
-            }
-        }
-        for (i in 0 until node.childCount) {
-            val c = node.getChild(i) ?: continue
-            val found = findMenuAction(c)
-            c.recycle()
-            if (found != null) return found
-        }
-        return null
-    }
-
-    private fun hashKey(node: AccessibilityNodeInfo): String {
+    private fun isVertical(node: AccessibilityNodeInfo): Boolean {
+        if (node.childCount < 2) return true
+        val a = Rect()
         val b = Rect()
-        node.getBoundsInScreen(b)
-        return "${node.viewIdResourceName ?: ""}_${b.left}_${b.top}_${b.right}_${b.bottom}"
+        val c1 = node.getChild(0)
+        val c2 = node.getChild(1)
+        c1?.getBoundsInScreen(a)
+        c2?.getBoundsInScreen(b)
+        c1?.recycle()
+        c2?.recycle()
+        return a.top < b.top && kotlin.math.abs(a.left - b.left) < 200
     }
 
     override fun onInterrupt() {

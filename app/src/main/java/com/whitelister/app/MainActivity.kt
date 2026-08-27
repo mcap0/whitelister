@@ -146,8 +146,8 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
     var reelsBlockingEnabled by remember {
         mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context))
     }
-    var hidePromotedEnabled by remember {
-        mutableStateOf(PreferencesManager.isHidePromotedEnabled(context))
+    var skipFeedReelsEnabled by remember {
+        mutableStateOf(PreferencesManager.isSkipFeedReelsEnabled(context))
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -156,7 +156,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
                 reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
-                hidePromotedEnabled = PreferencesManager.isHidePromotedEnabled(context)
+                skipFeedReelsEnabled = PreferencesManager.isSkipFeedReelsEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -254,7 +254,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
 
                     HorizontalDivider()
 
-                    // Hide Sponsored & Suggested Toggle
+                    // Skip Reels in Feed Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -262,19 +262,19 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                getString(context, R.string.hide_promoted_title),
+                                getString(context, R.string.skip_feed_reels_title),
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                getString(context, R.string.hide_promoted_summary),
+                                getString(context, R.string.skip_feed_reels_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                         Switch(
-                            checked = hidePromotedEnabled,
+                            checked = skipFeedReelsEnabled,
                             onCheckedChange = { enabled ->
-                                hidePromotedEnabled = enabled
-                                PreferencesManager.setHidePromotedEnabled(context, enabled)
+                                skipFeedReelsEnabled = enabled
+                                PreferencesManager.setSkipFeedReelsEnabled(context, enabled)
                             },
                             enabled = isAccessibilityEnabled
                         )

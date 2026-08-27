@@ -10,6 +10,7 @@ object PreferencesManager {
     private const val KEY_WHITELISTED_ACCOUNTS = "whitelisted_accounts"
     private const val KEY_FEED_FILTERING = "feed_filtering_enabled"
     private const val KEY_HIDE_PROMOTED = "hide_promoted_enabled"
+    private const val KEY_SKIP_FEED_REELS = "skip_feed_reels_enabled"
     private const val KEY_CONSENT_ACCEPTED = "consent_accepted"
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -56,11 +57,11 @@ object PreferencesManager {
         getPrefs(context).edit().putBoolean(KEY_FEED_FILTERING, enabled).apply()
     }
 
-    fun isHidePromotedEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_HIDE_PROMOTED, false)
+    fun isSkipFeedReelsEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_SKIP_FEED_REELS, false)
     }
 
-    fun setHidePromotedEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_HIDE_PROMOTED, enabled).apply()
+    fun setSkipFeedReelsEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_SKIP_FEED_REELS, enabled).apply()
     }
 }
