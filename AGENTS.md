@@ -101,3 +101,12 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **Code style**: Follow Android/Kotlin official conventions
 - **UI**: Jetpack Compose for all app screens
 - **Architecture**: MVVM or similar (ViewModel + State)
+
+## Branching & Releases
+
+- **`main`** is the production source of truth. Stable releases are tagged here as `vX.Y.Z` (not pre-release), e.g. `v1.0.4`.
+- **`dev`** is for new features. It is never auto-merged into `main`; only an explicit merge (PR) promotes code to `main`.
+- **Dev releases** are cut as **pre-release** tags `vX.Y.Z-devN` (e.g. `v1.1.0-dev1`) on the `dev` branch, with the GitHub "pre-release" flag set. They do not affect `main`.
+- **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
+- New features start at `1.1.0` on `dev`.
+- Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
