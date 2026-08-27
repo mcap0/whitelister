@@ -10,7 +10,8 @@ object PreferencesManager {
     private const val KEY_WHITELISTED_ACCOUNTS = "whitelisted_accounts"
     private const val KEY_FEED_FILTERING = "feed_filtering_enabled"
     private const val KEY_HIDE_PROMOTED = "hide_promoted_enabled"
-    private const val KEY_SKIP_FEED_REELS = "skip_feed_reels_enabled"
+    private const val KEY_AUTOPLAY_OFF = "autoplay_off_enabled"
+    private const val KEY_INFINITE_SCROLL_OFF = "infinite_scroll_off_enabled"
     private const val KEY_CONSENT_ACCEPTED = "consent_accepted"
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -57,11 +58,19 @@ object PreferencesManager {
         getPrefs(context).edit().putBoolean(KEY_FEED_FILTERING, enabled).apply()
     }
 
-    fun isSkipFeedReelsEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_SKIP_FEED_REELS, false)
+    fun isAutoplayOffEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_AUTOPLAY_OFF, false)
     }
 
-    fun setSkipFeedReelsEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_SKIP_FEED_REELS, enabled).apply()
+    fun setAutoplayOffEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_AUTOPLAY_OFF, enabled).apply()
+    }
+
+    fun isInfiniteScrollOffEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_INFINITE_SCROLL_OFF, false)
+    }
+
+    fun setInfiniteScrollOffEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_INFINITE_SCROLL_OFF, enabled).apply()
     }
 }

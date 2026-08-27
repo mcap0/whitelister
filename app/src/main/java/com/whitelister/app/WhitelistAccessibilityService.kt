@@ -17,9 +17,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val REELS_COOLDOWN_MS = 2000L
         private const val CONTENT_DETECT_THROTTLE_MS = 500L
         private const val FULLSCREEN_RATIO = 0.7f
-        private const val SKIP_THROTTLE_MS = 1500L
-        private val REEL_ID_HINTS = listOf("reel", "clips_video", "reel_viewer", "clips_viewer")
-        private val REEL_TEXT_HINTS = setOf("reels", "reel")
+        private const val AUTOPLAY_THROTTLE_MS = 1000L
+        private const val INFINITE_SCROLL_CAP = 30
+        private const val INFINITE_SCROLL_COOLDOWN_MS = 3000L
 
         var isRunning = false
             private set
@@ -31,7 +31,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastReelsBlockTime = 0L
     private var lastContentDetectTime = 0L
-    private var lastSkipTime = 0L
+    private var lastAutoplayTime = 0L
+    private var lastInfiniteBackTime = 0L
+    private var scrollCount = 0
     private var isInReelsViewer = false
 
     override fun onServiceConnected() {
@@ -57,7 +59,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (event.packageName != "com.instagram.android") return
 
         val reelsEnabled = PreferencesManager.isReelsBlockingEnabled(this)
-        val skipEnabled = PreferencesManager.isSkipFeedReelsEnabled(this)
+        val autoplayEnabled = PreferencesManager.isAutoplayOffEnabled(this)
+        val infiniteScrollEnabled = PreferencesManager.isInfiniteScrollOffEnabled(this)
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -66,7 +69,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 } else {
                     isInReelsViewer = false
                 }
-                if (skipEnabled) applySkipFeedReels()
+                scrollCount = 0
+                if (autoplayEnabled) applyAutoplayOff()
+                if (infiniteScrollEnabled) applyInfiniteScrollOff()
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (reelsEnabled) {
@@ -76,7 +81,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         detectReelsViewer()
                     }
                 }
-                if (skipEnabled) applySkipFeedReels()
+                if (autoplayEnabled) applyAutoplayOff()
+                if (infiniteScrollEnabled) applyInfiniteScrollOff()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (reelsEnabled) {
@@ -91,7 +97,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         blockReels()
                     }
                 }
-                if (skipEnabled) applySkipFeedReels()
+                scrollCount++
+                if (autoplayEnabled) applyAutoplayOff()
+                if (infiniteScrollEnabled) applyInfiniteScrollOff()
             }
         }
     }
@@ -184,41 +192,30 @@ class WhitelistAccessibilityService : AccessibilityService() {
         isInReelsViewer = false
     }
 
-    // ---- Skip Reels that appear inline in the feed ----
+    // ---- Disable Autoplay: pause videos/reels that start playing in the feed ----
 
-    private fun applySkipFeedReels() {
-        if (!PreferencesManager.isSkipFeedReelsEnabled(this)) return
+    private fun applyAutoplayOff() {
         val now = System.currentTimeMillis()
-        if (now - lastSkipTime < SKIP_THROTTLE_MS) return
+        if (now - lastAutoplayTime < AUTOPLAY_THROTTLE_MS) return
+        lastAutoplayTime = now
 
         val root = getRootInActiveWindow() ?: return
         try {
-            var feedScrollable: AccessibilityNodeInfo? = null
-            var reelInfo = ""
+            var target: AccessibilityNodeInfo? = null
+            var targetInfo = ""
 
             fun scan(node: AccessibilityNodeInfo, depth: Int) {
-                if (feedScrollable != null || depth > 18) return
-                if (isReelNode(node)) {
+                if (target != null || depth > 18) return
+                if (isPlayingVideoNode(node)) {
                     val b = Rect()
                     node.getBoundsInScreen(b)
-                    val visible = b.top < screenHeight() && b.bottom > 0
-                    reelInfo = "id=${node.viewIdResourceName} text=${node.text} visible=$visible"
-                    Log.d(TAG, "Skip: reel node found ($reelInfo)")
-                    if (!visible) return
-                    // Walk up to nearest scrollable ancestor.
-                    // Vertical -> home feed (skip). Horizontal -> Reels tab pager (ignore).
-                    var a: AccessibilityNodeInfo? = node
-                    for (step in 0..8) {
-                        a = a?.parent ?: break
-                        if (a.isScrollable) {
-                            if (isVertical(a)) {
-                                feedScrollable = AccessibilityNodeInfo.obtain(a)
-                                Log.d(TAG, "Skip: feed scrollable found (vertical) -> scroll")
-                            } else {
-                                Log.d(TAG, "Skip: horizontal pager, ignore")
-                            }
-                            return
-                        }
+                    val sh = screenHeight()
+                    val visible = b.top < sh && b.bottom > 0
+                    val areaRatio = if (sh > 0) b.height().toFloat() / sh.toFloat() else 0f
+                    if (visible && areaRatio > 0.3f) {
+                        target = AccessibilityNodeInfo.obtain(node)
+                        targetInfo = "class=${node.className} id=${node.viewIdResourceName} text=${node.text}"
+                        Log.d(TAG, "Autoplay: video node found ($targetInfo)")
                     }
                 }
                 for (i in 0 until node.childCount) {
@@ -229,31 +226,54 @@ class WhitelistAccessibilityService : AccessibilityService() {
             }
             scan(root, 0)
 
-            val fs = feedScrollable
-            if (fs != null) {
-                fs.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                Log.d(TAG, "Skip: scrolled past feed reel")
-                fs.recycle()
-                lastSkipTime = now
+            val t = target
+            if (t != null) {
+                // Try to find an explicit play/pause control first.
+                var pauseControl: AccessibilityNodeInfo? = null
+                fun findPause(n: AccessibilityNodeInfo, depth: Int) {
+                    if (pauseControl != null || depth > 6) return
+                    val cd = n.contentDescription?.toString()?.lowercase()
+                    val txt = n.text?.toString()?.lowercase()
+                    if ((cd != null && (cd.contains("pause") || cd.contains("play"))) ||
+                        (txt != null && (txt.contains("pause") || txt.contains("play")))) {
+                        pauseControl = AccessibilityNodeInfo.obtain(n)
+                        return
+                    }
+                    for (i in 0 until n.childCount) {
+                        val c = n.getChild(i) ?: continue
+                        findPause(c, depth + 1)
+                        c.recycle()
+                    }
+                }
+                findPause(t, 0)
+
+                if (pauseControl != null) {
+                    pauseControl!!.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Log.d(TAG, "Autoplay: pause control clicked")
+                    pauseControl!!.recycle()
+                } else {
+                    // Fallback: tap the media itself. For a reel this may open the
+                    // viewer, which the Reels back-block then closes.
+                    t.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Log.d(TAG, "Autoplay: no pause control -> clicked media (fallback)")
+                }
+                t.recycle()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in skip feed reels", e)
+            Log.e(TAG, "Error in autoplay off", e)
         } finally {
             root.recycle()
         }
     }
 
-    private fun isReelNode(node: AccessibilityNodeInfo): Boolean {
-        val id = node.viewIdResourceName?.lowercase()
-        if (id != null) {
-            for (h in REEL_ID_HINTS) if (id.contains(h)) return true
-        }
+    private fun isPlayingVideoNode(node: AccessibilityNodeInfo): Boolean {
+        val cls = node.className?.toString()?.lowercase() ?: ""
+        if (cls.contains("video") || cls.contains("texture") || cls.contains("surface") || cls.contains("exo")) return true
         val t = node.text?.toString()?.lowercase()
         val cd = node.contentDescription?.toString()?.lowercase()
-        for (h in REEL_TEXT_HINTS) {
-            if (t != null && t.contains(h)) return true
-            if (cd != null && cd.contains(h)) return true
-        }
+        if (t == "reel" || t == "video" || cd == "reel" || cd == "video") return true
+        if (t != null && t.contains("reel")) return true
+        if (cd != null && cd.contains("reel")) return true
         return false
     }
 
@@ -264,17 +284,22 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return metrics.heightPixels
     }
 
-    private fun isVertical(node: AccessibilityNodeInfo): Boolean {
-        if (node.childCount < 2) return true
-        val a = Rect()
-        val b = Rect()
-        val c1 = node.getChild(0)
-        val c2 = node.getChild(1)
-        c1?.getBoundsInScreen(a)
-        c2?.getBoundsInScreen(b)
-        c1?.recycle()
-        c2?.recycle()
-        return a.top < b.top && kotlin.math.abs(a.left - b.left) < 200
+    // ---- Limit Infinite Scroll: leave the feed after extended scrolling ----
+
+    private fun applyInfiniteScrollOff() {
+        if (scrollCount < INFINITE_SCROLL_CAP) return
+        val now = System.currentTimeMillis()
+        if (now - lastInfiniteBackTime < INFINITE_SCROLL_COOLDOWN_MS) return
+        lastInfiniteBackTime = now
+        scrollCount = 0
+        Log.d(TAG, "InfiniteScroll: cap reached ($INFINITE_SCROLL_CAP) -> BACK to exit feed")
+        handler.post {
+            try {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed infinite scroll back", e)
+            }
+        }
     }
 
     override fun onInterrupt() {

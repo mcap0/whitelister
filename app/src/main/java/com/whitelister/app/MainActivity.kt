@@ -146,8 +146,11 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
     var reelsBlockingEnabled by remember {
         mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context))
     }
-    var skipFeedReelsEnabled by remember {
-        mutableStateOf(PreferencesManager.isSkipFeedReelsEnabled(context))
+    var autoplayOffEnabled by remember {
+        mutableStateOf(PreferencesManager.isAutoplayOffEnabled(context))
+    }
+    var infiniteScrollOffEnabled by remember {
+        mutableStateOf(PreferencesManager.isInfiniteScrollOffEnabled(context))
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -156,7 +159,8 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
                 reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
-                skipFeedReelsEnabled = PreferencesManager.isSkipFeedReelsEnabled(context)
+                autoplayOffEnabled = PreferencesManager.isAutoplayOffEnabled(context)
+                infiniteScrollOffEnabled = PreferencesManager.isInfiniteScrollOffEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -254,7 +258,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
 
                     HorizontalDivider()
 
-                    // Skip Reels in Feed Toggle
+                    // Disable Autoplay Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -262,19 +266,47 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                getString(context, R.string.skip_feed_reels_title),
+                                getString(context, R.string.autoplay_off_title),
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                getString(context, R.string.skip_feed_reels_summary),
+                                getString(context, R.string.autoplay_off_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                         Switch(
-                            checked = skipFeedReelsEnabled,
+                            checked = autoplayOffEnabled,
                             onCheckedChange = { enabled ->
-                                skipFeedReelsEnabled = enabled
-                                PreferencesManager.setSkipFeedReelsEnabled(context, enabled)
+                                autoplayOffEnabled = enabled
+                                PreferencesManager.setAutoplayOffEnabled(context, enabled)
+                            },
+                            enabled = isAccessibilityEnabled
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    // Limit Infinite Scroll Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                getString(context, R.string.infinite_scroll_off_title),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                getString(context, R.string.infinite_scroll_off_summary),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Switch(
+                            checked = infiniteScrollOffEnabled,
+                            onCheckedChange = { enabled ->
+                                infiniteScrollOffEnabled = enabled
+                                PreferencesManager.setInfiniteScrollOffEnabled(context, enabled)
                             },
                             enabled = isAccessibilityEnabled
                         )
