@@ -33,7 +33,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var lastBlockHomeTime = 0L
     private var isInReelsViewer = false
     private var reelsEnteredAt = 0L
-    private var lastFeedScrollY = -1
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -62,7 +61,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                lastFeedScrollY = -1
                 if (reelsEnabled) {
                     detectReelsViewer()
                 } else {
@@ -96,14 +94,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         }
                     }
                 }
-                if (blockHomeEnabled) {
-                    val y = event.scrollY
-                    val downward = y > lastFeedScrollY + 20
-                    lastFeedScrollY = y
-                    if (downward && y > 30) {
-                        applyBlockHomeFeed()
-                    }
-                }
+                if (blockHomeEnabled) applyBlockHomeFeed()
             }
         }
     }
@@ -204,9 +195,35 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     // ---- Lock Home feed: keep the user at the top (Stories only) on the For You tab ----
-    // Works by pressing the bottom-nav Home button, which on Instagram natively
-    // scrolls the feed back to the top. Detection keys off the Home button's
-    // isSelected state (not fragile UI text).
+    // Bounces by scrolling the feed UP (ACTION_SCROLL_BACKWARD) on the feed
+    // scrollable. This avoids re-selecting the bottom-nav Home tab, which would
+    // make Instagram pull-to-refresh and loop. Home-tap is only a fallback if the
+    // scroll action is rejected. Detection keys off the Home button's isSelected
+    // state (not fragile UI text).
+
+    private fun findFeedScrollable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestH = 0
+        fun scan(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > 20) return
+            if (node.isScrollable) {
+                val b = Rect()
+                node.getBoundsInScreen(b)
+                val h = b.height()
+                if (h > bestH) {
+                    bestH = h
+                    best = node
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val c = node.getChild(i) ?: continue
+                scan(c, depth + 1)
+                c.recycle()
+            }
+        }
+        scan(root, 0)
+        return best
+    }
 
     private fun applyBlockHomeFeed() {
         val now = System.currentTimeMillis()
@@ -225,17 +242,27 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "LockHome: Home button not found")
                 return
             }
-            if (!homeBtn.isSelected) {
+            if (!homeBtn.isSelected && !homeBtn.isChecked) {
                 Log.d(TAG, "LockHome: not on Home tab, skip")
+                homeBtn.recycle()
                 return
             }
             if (isOnFavorites(root)) {
                 Log.d(TAG, "LockHome: on Favorites, skip")
+                homeBtn.recycle()
                 return
             }
             lastBlockHomeTime = now
-            homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Log.d(TAG, "LockHome: pressed Home -> bounce to top")
+            val feed = findFeedScrollable(root)
+            val scrolled = feed?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) ?: false
+            if (scrolled) {
+                Log.d(TAG, "LockHome: scrolled feed backward (no reload)")
+            } else {
+                homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                Log.d(TAG, "LockHome: scroll-back rejected -> tapped Home (fallback)")
+            }
+            feed?.recycle()
+            homeBtn.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Error in block home feed", e)
         } finally {
