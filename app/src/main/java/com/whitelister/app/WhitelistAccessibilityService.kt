@@ -2,8 +2,10 @@ package com.whitelister.app
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -12,7 +14,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "WhitelistService"
-        private const val REELS_COOLDOWN_MS = 1500L
+        private const val REELS_COOLDOWN_MS = 2000L
+        private const val CONTENT_DETECT_THROTTLE_MS = 500L
+        private const val FULLSCREEN_RATIO = 0.85f
 
         var isRunning = false
             private set
@@ -23,7 +27,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var lastReelsBlockTime = 0L
-    private var isReelsTab = false
+    private var lastContentDetectTime = 0L
+    private var isInReelsViewer = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -52,52 +57,100 @@ class WhitelistAccessibilityService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 if (reelsEnabled) {
-                    detectReelsTab()
+                    detectReelsViewer()
                 } else {
-                    isReelsTab = false
+                    isInReelsViewer = false
+                }
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                if (reelsEnabled) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastContentDetectTime >= CONTENT_DETECT_THROTTLE_MS) {
+                        lastContentDetectTime = now
+                        detectReelsViewer()
+                    }
                 }
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                if (reelsEnabled && isReelsTab) {
+                if (reelsEnabled && isInReelsViewer) {
                     blockReels()
                 }
             }
         }
     }
 
-    private fun detectReelsTab() {
-        isReelsTab = false
+    private fun detectReelsViewer() {
+        isInReelsViewer = false
 
         try {
             val rootNode = getRootInActiveWindow() ?: return
-            isReelsTab = checkClipsTabSelected(rootNode, 0)
+            isInReelsViewer = isReelsTabSelected(rootNode, 0) ||
+                    isFullscreenReelViewer(rootNode, 0)
             rootNode.recycle()
+            Log.d(TAG, "Reels viewer detection: $isInReelsViewer")
         } catch (e: Exception) {
-            Log.e(TAG, "Error detecting reels tab", e)
+            Log.e(TAG, "Error detecting reels viewer", e)
         }
     }
 
-    private fun checkClipsTabSelected(node: AccessibilityNodeInfo, depth: Int): Boolean {
+    private fun isReelsTabSelected(node: AccessibilityNodeInfo, depth: Int): Boolean {
         if (depth > 15) return false
 
         val viewId = node.viewIdResourceName
-        if (viewId != null && viewId.contains("clips_tab")) {
-            if (node.isSelected) {
-                Log.d(TAG, "Reels TAB detected: $viewId isSelected=true")
+        if (viewId != null && viewId.contains("clips_tab") && node.isSelected) {
+            Log.d(TAG, "Reels TAB detected: $viewId isSelected=true")
+            return true
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = isReelsTabSelected(child, depth + 1)
+            child.recycle()
+            if (found) return true
+        }
+
+        return false
+    }
+
+    private fun isFullscreenReelViewer(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 15) return false
+
+        val viewId = node.viewIdResourceName
+        if (viewId != null) {
+            val isReelContainer = viewId.contains("clips_viewer_view_pager") ||
+                    viewId.contains("reel_viewer") ||
+                    viewId.contains("clips_video_container")
+            if (isReelContainer && isNodeFullscreen(node)) {
+                Log.d(TAG, "Fullscreen reel viewer detected: $viewId")
                 return true
             }
         }
 
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (checkClipsTabSelected(child, depth + 1)) {
-                child.recycle()
-                return true
-            }
+            val found = isFullscreenReelViewer(child, depth + 1)
             child.recycle()
+            if (found) return true
         }
 
         return false
+    }
+
+    private fun isNodeFullscreen(node: AccessibilityNodeInfo): Boolean {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        if (bounds.isEmpty) return false
+
+        val metrics = DisplayMetrics()
+        val display = getSystemService(android.view.WindowManager::class.java)?.defaultDisplay
+        if (display == null) return false
+        display.getRealMetrics(metrics)
+
+        val screenArea = metrics.widthPixels.toFloat() * metrics.heightPixels.toFloat()
+        val nodeArea = bounds.width().toFloat() * bounds.height().toFloat()
+        if (screenArea <= 0) return false
+
+        return (nodeArea / screenArea) >= FULLSCREEN_RATIO
     }
 
     private fun blockReels() {
@@ -113,6 +166,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 Log.e(TAG, "Failed to perform back action", e)
             }
         }
+        isInReelsViewer = false
     }
 
     override fun onInterrupt() {

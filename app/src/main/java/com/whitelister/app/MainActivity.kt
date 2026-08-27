@@ -15,7 +15,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.whitelister.app.ui.theme.WhitelisterTheme
 
 class MainActivity : ComponentActivity() {
@@ -54,9 +57,18 @@ fun WhitelisterScreen() {
     var showAddAccountDialog by remember { mutableStateOf(false) }
     var newAccountInput by remember { mutableStateOf("") }
 
-    // Re-compute accessibility status on every recomposition
-    LaunchedEffect(Unit) {
-        isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
+                reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Column(
