@@ -17,7 +17,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val REELS_COOLDOWN_MS = 2000L
         private const val CONTENT_DETECT_THROTTLE_MS = 500L
         private const val FULLSCREEN_RATIO = 0.7f
-        private const val BLOCK_HOME_THROTTLE_MS = 800L
+        private const val BLOCK_HOME_THROTTLE_MS = 1000L
         private const val REELS_GRACE_MS = 1000L
 
         var isRunning = false
@@ -33,6 +33,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var lastBlockHomeTime = 0L
     private var isInReelsViewer = false
     private var reelsEnteredAt = 0L
+    private var lastFeedScrollY = -1
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -61,6 +62,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                lastFeedScrollY = -1
                 if (reelsEnabled) {
                     detectReelsViewer()
                 } else {
@@ -94,7 +96,14 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         }
                     }
                 }
-                if (blockHomeEnabled) applyBlockHomeFeed()
+                if (blockHomeEnabled) {
+                    val y = event.scrollY
+                    val downward = y > lastFeedScrollY + 20
+                    lastFeedScrollY = y
+                    if (downward && y > 30) {
+                        applyBlockHomeFeed()
+                    }
+                }
             }
         }
     }
