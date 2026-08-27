@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Whitelister</string>
-    <string name="accessibility_service_description">Whitelister uses accessibility service to modify Instagram feed and reels behavior. This allows hiding reels and filtering your feed to only show whitelisted accounts.</string>
+    <string name="accessibility_service_description">Whitelister uses the AccessibilityService solely to detect when you are viewing Instagram Reels and prevent scrolling between them, helping you reduce time spent on Reels. All processing happens on your device; no data leaves the app.</string>
+
+    <string name="consent_title">Accessibility Service Consent</string>
+    <string name="consent_body">Whitelister uses Android\'s AccessibilityService to interact with Instagram.\n\nThe service reads Instagram\'s on-screen interface — including the view structure and visible text such as account names and captions — but ONLY to detect when you are viewing Reels and to prevent scrolling between them.\n\nAll processing happens on your device. Nothing is stored, logged, or sent anywhere. Whitelister has no internet access, no analytics, and no ads.\n\nBy tapping \"I Accept\" you consent to the use of the AccessibilityService as described in our Privacy Policy.</string>
+    <string name="consent_accept">I Accept</string>
+    <string name="consent_decline">Decline</string>
+    <string name="view_privacy_policy">View Privacy Policy</string>
+
+    <string name="privacy_policy_title">Privacy Policy</string>
+    <string name="privacy_policy_text">Whitelister Privacy Policy\n\nWhitelister is an Android app that helps you reduce time spent on Instagram Reels by using Android\'s AccessibilityService.\n\nWhat data the AccessibilityService accesses\nTo function, Whitelister\'s AccessibilityService reads the on-screen user interface of Instagram (com.instagram.android), including the view hierarchy, view identifiers, and visible text such as account names and post captions. This access is required solely to detect when you are viewing Reels and to prevent scrolling between them.\n\nHow the data is used\nAll processing happens locally on your device, in memory, at the moment the screen is shown. Whitelister does not store, log, or transmit any of this information.\n\nData collection and sharing\nWhitelister collects no personal data. It does not use the internet, contains no analytics SDKs, and displays no advertisements. No data is shared with the developer or any third party.\n\nYour controls\nYou can disable the AccessibilityService at any time in Android Settings &gt; Accessibility. Uninstalling the app removes all local preferences.\n\nContact\nFor questions, contact the developer via the project repository.\n\nLast updated: 2026-08-27</string>
 </resources>

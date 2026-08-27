@@ -1,6 +1,7 @@
 package com.whitelister.app
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -8,6 +9,8 @@ import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
@@ -30,26 +33,121 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    WhitelisterScreen()
+                    AppRoot()
                 }
             }
         }
     }
+}
 
-    override fun onResume() {
-        super.onResume()
-        // Refresh accessibility status when returning from settings
+@Composable
+fun AppRoot() {
+    val context = LocalContext.current
+    var consentAccepted by remember {
+        mutableStateOf(PreferencesManager.isConsentAccepted(context))
+    }
+    var showPolicy by remember { mutableStateOf(false) }
+
+    when {
+        !consentAccepted -> ConsentScreen(
+            onAccept = {
+                PreferencesManager.setConsentAccepted(context, true)
+                consentAccepted = true
+            },
+            onDecline = { (context as? ComponentActivity)?.finish() },
+            onViewPolicy = { showPolicy = true }
+        )
+        showPolicy -> PolicyScreen(onClose = { showPolicy = false })
+        else -> WhitelisterScreen(onOpenPolicy = { showPolicy = true })
     }
 }
 
 @Composable
-fun WhitelisterScreen() {
+fun ConsentScreen(
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+    onViewPolicy: () -> Unit
+) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = getString(context, R.string.consent_title),
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Text(
+            text = getString(context, R.string.consent_body),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Button(
+            onClick = onViewPolicy,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(getString(context, R.string.view_privacy_policy))
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        Button(
+            onClick = onAccept,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(getString(context, R.string.consent_accept))
+        }
+        OutlinedButton(
+            onClick = onDecline,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(getString(context, R.string.consent_decline))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PolicyScreen(onClose: () -> Unit) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        TopAppBar(
+            title = { Text(getString(context, R.string.privacy_policy_title)) },
+            actions = {
+                IconButton(onClick = onClose) {
+                    Text("Close")
+                }
+            }
+        )
+        Text(
+            text = getString(context, R.string.privacy_policy_text),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState())
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
     val context = LocalContext.current
     var isAccessibilityEnabled by remember {
         mutableStateOf(isAccessibilityServiceEnabled(context))
     }
     var reelsBlockingEnabled by remember {
         mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context))
+    }
+    var feedFilteringEnabled by remember {
+        mutableStateOf(PreferencesManager.isFeedFilteringEnabled(context))
     }
     var whitelistedAccounts by remember {
         mutableStateOf(PreferencesManager.getWhitelistedAccounts(context))
@@ -63,6 +161,7 @@ fun WhitelisterScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
                 reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
+                feedFilteringEnabled = PreferencesManager.isFeedFilteringEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -76,148 +175,155 @@ fun WhitelisterScreen() {
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = "Whitelister",
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        // Accessibility Service Status
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "Accessibility Service",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = if (isAccessibilityEnabled) "Enabled" else "Disabled — Tap to enable",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isAccessibilityEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                )
-                Button(
-                    onClick = {
-                        if (!isAccessibilityEnabled) {
-                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (isAccessibilityEnabled) "Service Active" else "Enable Service")
+        TopAppBar(
+            title = { Text("Whitelister") },
+            actions = {
+                IconButton(onClick = onOpenPolicy) {
+                    Icon(Icons.Filled.Info, contentDescription = "Privacy & info")
                 }
             }
-        }
-
-        // Instagram Features
-        Card(
-            modifier = Modifier.fillMaxWidth()
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Accessibility Service Status
+            Card(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = "Instagram",
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                // Remove Reels Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Remove Reels", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "Blocks scrolling between reels",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    Switch(
-                        checked = reelsBlockingEnabled,
-                        onCheckedChange = { enabled ->
-                            reelsBlockingEnabled = enabled
-                            PreferencesManager.setReelsBlockingEnabled(context, enabled)
-                        },
-                        enabled = isAccessibilityEnabled
+                    Text(
+                        text = "Accessibility Service",
+                        style = MaterialTheme.typography.titleMedium
                     )
+                    Text(
+                        text = if (isAccessibilityEnabled) "Enabled" else "Disabled — Tap to enable",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isAccessibilityEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
+                    Button(
+                        onClick = {
+                            if (!isAccessibilityEnabled) {
+                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (isAccessibilityEnabled) "Service Active" else "Enable Service")
+                    }
                 }
+            }
 
-                HorizontalDivider()
+            // Instagram Features
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Instagram",
+                        style = MaterialTheme.typography.titleMedium
+                    )
 
-                // Whitelist Feed Section
-                Column {
+                    // Remove Reels Toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text("Whitelist Feed", style = MaterialTheme.typography.bodyLarge)
-                                SuggestionChip(
-                                    onClick = {},
-                                    label = { Text("In Progress", style = MaterialTheme.typography.labelSmall) },
-                                    icon = {
-                                        Icon(
-                                            Icons.Default.Info,
-                                            contentDescription = "In progress",
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
-                                )
-                            }
+                            Text("Remove Reels", style = MaterialTheme.typography.bodyLarge)
                             Text(
-                                "Only show posts from these accounts",
+                                "Blocks scrolling between reels",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
-                        Button(
-                            onClick = { showAddAccountDialog = true },
-                            enabled = false
-                        ) {
-                            Text("Add")
-                        }
+                        Switch(
+                            checked = reelsBlockingEnabled,
+                            onCheckedChange = { enabled ->
+                                reelsBlockingEnabled = enabled
+                                PreferencesManager.setReelsBlockingEnabled(context, enabled)
+                            },
+                            enabled = isAccessibilityEnabled
+                        )
                     }
 
-                    // List of whitelisted accounts
-                    whitelistedAccounts.forEach { account ->
+                    HorizontalDivider()
+
+                    // Whitelist Feed Section
+                    Column {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("@$account")
-                            TextButton(
-                                onClick = {
-                                    whitelistedAccounts = whitelistedAccounts - account
-                                    PreferencesManager.setWhitelistedAccounts(context, whitelistedAccounts)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Whitelist Feed", style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "Only show posts from these accounts",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Switch(
+                                checked = feedFilteringEnabled,
+                                onCheckedChange = { enabled ->
+                                    feedFilteringEnabled = enabled
+                                    PreferencesManager.setFeedFilteringEnabled(context, enabled)
                                 },
-                                enabled = false
+                                enabled = isAccessibilityEnabled
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(
+                                onClick = { showAddAccountDialog = true },
+                                enabled = isAccessibilityEnabled && feedFilteringEnabled
                             ) {
-                                Text("Remove")
+                                Text("Add")
                             }
                         }
-                    }
 
-                    if (whitelistedAccounts.isEmpty()) {
-                        Text(
-                            "No accounts whitelisted",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        // List of whitelisted accounts
+                        whitelistedAccounts.forEach { account ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("@$account")
+                                TextButton(
+                                    onClick = {
+                                        whitelistedAccounts = whitelistedAccounts - account
+                                        PreferencesManager.setWhitelistedAccounts(context, whitelistedAccounts)
+                                    },
+                                    enabled = isAccessibilityEnabled
+                                ) {
+                                    Text("Remove")
+                                }
+                            }
+                        }
+
+                        if (whitelistedAccounts.isEmpty()) {
+                            Text(
+                                "No accounts whitelisted",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -270,7 +376,9 @@ fun WhitelisterScreen() {
     }
 }
 
-private fun isAccessibilityServiceEnabled(context: android.content.Context): Boolean {
+private fun getString(context: Context, resId: Int): String = context.getString(resId)
+
+private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val service = ComponentName(context, WhitelistAccessibilityService::class.java)
     val enabledServices = Settings.Secure.getString(
         context.contentResolver,
