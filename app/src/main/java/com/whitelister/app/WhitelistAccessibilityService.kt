@@ -19,6 +19,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val FULLSCREEN_RATIO = 0.7f
         private const val SKIP_THROTTLE_MS = 1500L
         private val REEL_ID_HINTS = listOf("reel", "clips_video", "reel_viewer", "clips_viewer")
+        private val REEL_TEXT_HINTS = setOf("reels", "reel")
 
         var isRunning = false
             private set
@@ -189,28 +190,34 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (!PreferencesManager.isSkipFeedReelsEnabled(this)) return
         val now = System.currentTimeMillis()
         if (now - lastSkipTime < SKIP_THROTTLE_MS) return
-        lastSkipTime = now
 
         val root = getRootInActiveWindow() ?: return
         try {
             var feedScrollable: AccessibilityNodeInfo? = null
+            var reelInfo = ""
 
             fun scan(node: AccessibilityNodeInfo, depth: Int) {
                 if (feedScrollable != null || depth > 18) return
-                val id = node.viewIdResourceName?.lowercase()
-                if (id != null) {
-                    for (h in REEL_ID_HINTS) {
-                        if (id.contains(h) && !isNodeFullscreen(node)) {
-                            // Inline feed reel: find nearest vertical scrollable ancestor
-                            var a: AccessibilityNodeInfo? = node
-                            for (step in 0..8) {
-                                a = a?.parent ?: break
-                                if (a.isScrollable && isVertical(a)) {
-                                    feedScrollable = AccessibilityNodeInfo.obtain(a)
-                                    return
-                                }
+                if (isReelNode(node)) {
+                    val b = Rect()
+                    node.getBoundsInScreen(b)
+                    val visible = b.top < screenHeight() && b.bottom > 0
+                    reelInfo = "id=${node.viewIdResourceName} text=${node.text} visible=$visible"
+                    Log.d(TAG, "Skip: reel node found ($reelInfo)")
+                    if (!visible) return
+                    // Walk up to nearest scrollable ancestor.
+                    // Vertical -> home feed (skip). Horizontal -> Reels tab pager (ignore).
+                    var a: AccessibilityNodeInfo? = node
+                    for (step in 0..8) {
+                        a = a?.parent ?: break
+                        if (a.isScrollable) {
+                            if (isVertical(a)) {
+                                feedScrollable = AccessibilityNodeInfo.obtain(a)
+                                Log.d(TAG, "Skip: feed scrollable found (vertical) -> scroll")
+                            } else {
+                                Log.d(TAG, "Skip: horizontal pager, ignore")
                             }
-                            break
+                            return
                         }
                     }
                 }
@@ -227,12 +234,34 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 fs.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                 Log.d(TAG, "Skip: scrolled past feed reel")
                 fs.recycle()
+                lastSkipTime = now
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in skip feed reels", e)
         } finally {
             root.recycle()
         }
+    }
+
+    private fun isReelNode(node: AccessibilityNodeInfo): Boolean {
+        val id = node.viewIdResourceName?.lowercase()
+        if (id != null) {
+            for (h in REEL_ID_HINTS) if (id.contains(h)) return true
+        }
+        val t = node.text?.toString()?.lowercase()
+        val cd = node.contentDescription?.toString()?.lowercase()
+        for (h in REEL_TEXT_HINTS) {
+            if (t != null && t.contains(h)) return true
+            if (cd != null && cd.contains(h)) return true
+        }
+        return false
+    }
+
+    private fun screenHeight(): Int {
+        val metrics = DisplayMetrics()
+        val display = getSystemService(android.view.WindowManager::class.java)?.defaultDisplay
+        display?.getRealMetrics(metrics) ?: return 0
+        return metrics.heightPixels
     }
 
     private fun isVertical(node: AccessibilityNodeInfo): Boolean {

@@ -12,8 +12,8 @@ android {
         applicationId = "com.whitelister.app"
         minSdk = 30
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.1.0-dev6"
+        versionCode = 16
+        versionName = "1.1.0-dev7"
     }
 
     buildTypes {
