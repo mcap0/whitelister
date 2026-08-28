@@ -2,13 +2,11 @@ package com.whitelister.app
 
 import android.content.Context
 import android.content.SharedPreferences
-import org.json.JSONArray
 
 object PreferencesManager {
     private const val PREFS_NAME = "whitelister_prefs"
     private const val KEY_REELS_BLOCKING = "reels_blocking_enabled"
-    private const val KEY_WHITELISTED_ACCOUNTS = "whitelisted_accounts"
-    private const val KEY_FEED_FILTERING = "feed_filtering_enabled"
+    private const val KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"
     private const val KEY_CONSENT_ACCEPTED = "consent_accepted"
 
     private fun getPrefs(context: Context): SharedPreferences {
@@ -23,22 +21,6 @@ object PreferencesManager {
         getPrefs(context).edit().putBoolean(KEY_REELS_BLOCKING, enabled).apply()
     }
 
-    fun getWhitelistedAccounts(context: Context): Set<String> {
-        val json = getPrefs(context).getString(KEY_WHITELISTED_ACCOUNTS, null) ?: return emptySet()
-        val array = JSONArray(json)
-        val accounts = mutableSetOf<String>()
-        for (i in 0 until array.length()) {
-            accounts.add(array.getString(i))
-        }
-        return accounts
-    }
-
-    fun setWhitelistedAccounts(context: Context, accounts: Set<String>) {
-        val array = JSONArray()
-        accounts.forEach { array.put(it) }
-        getPrefs(context).edit().putString(KEY_WHITELISTED_ACCOUNTS, array.toString()).apply()
-    }
-
     fun isConsentAccepted(context: Context): Boolean {
         return getPrefs(context).getBoolean(KEY_CONSENT_ACCEPTED, false)
     }
@@ -47,11 +29,11 @@ object PreferencesManager {
         getPrefs(context).edit().putBoolean(KEY_CONSENT_ACCEPTED, accepted).apply()
     }
 
-    fun isFeedFilteringEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_FEED_FILTERING, false)
+    fun isBlockHomeFeedEnabled(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_BLOCK_HOME_FEED, false)
     }
 
-    fun setFeedFilteringEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_FEED_FILTERING, enabled).apply()
+    fun setBlockHomeFeedEnabled(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_BLOCK_HOME_FEED, enabled).apply()
     }
 }
