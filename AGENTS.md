@@ -6,7 +6,7 @@ Android app to reclaim control over social media. Starts with Instagram; more ap
 
 **Current features (in order):**
 1. Remove reels — blocks scrolling in Instagram reels tab (you can view one reel by tapping, but cannot scroll between them). **WORKING — do not modify.**
-2. Lock Home Feed — keeps the user at the top of the For You feed (Stories only); Favorites scrollable, Reels untouched. **WORKING (stable, v1.1.0).** (Originally specced as "Whitelist feed" — filtering the feed to whitelisted accounts — which was found infeasible via AccessibilityService and superseded by this approach.)
+2. Lock Home Feed — keeps the user at the top of the For You feed (Stories only); Favorites scrollable, Reels untouched. **WORKING (stable, v1.1.1).** (Originally specced as "Whitelist feed" — filtering the feed to whitelisted accounts — which was found infeasible via AccessibilityService and superseded by this approach.)
 
 ## Architecture
 
@@ -79,8 +79,8 @@ whitelister/
 ## Current State
 
 - **Reels blocking: WORKING (stable, `main` v1.0.x and inherited by `dev`)** — blocks reels in BOTH the Reels tab and reels opened from the feed, without breaking the rest of Instagram or closing the app. **Do not modify this logic.**
-- **Lock Home Feed: WORKING (v1.1.0)** — implemented in `WhitelistAccessibilityService` (`applyBlockHomeFeed`, plus helpers `findStoriesTray`, `isFeedAtTop`). See section below for how it works.
-- **Production build config** — `versionCode 30`, `versionName 1.1.0`. Release uses R8 minify + resource shrink (`isMinifyEnabled = true`, `proguard-rules.pro`, keep rules for the service/activity already present). All `Log.*` calls in the service are gated behind `BuildConfig.DEBUG` (`buildConfig = true`) so a release build logs nothing — keep new log statements gated the same way.
+- **Lock Home Feed: WORKING (v1.1.1)** — implemented in `WhitelistAccessibilityService` (`applyBlockHomeFeed`, plus helpers `findStoriesTray`, `isFeedAtTop`, `isOtherNavTabSelected`). See section below for how it works.
+- **Production build config** — `main`: `versionCode 31`, `versionName 1.1.1`. Release uses R8 minify + resource shrink (`isMinifyEnabled = true`, `proguard-rules.pro`, keep rules for the service/activity already present). All `Log.*` calls in the service are gated behind `BuildConfig.DEBUG` (`buildConfig = true`) so a release build logs nothing — keep new log statements gated the same way.
 - **Settings persistence** — Reels toggle and Lock-Home-Feed toggle stored in SharedPreferences via `PreferencesManager` (`KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"`).
 - **Live UI status** — MainActivity re-checks accessibility service status on `ON_RESUME` so returning from Settings shows "Service Active" immediately
 
@@ -96,11 +96,11 @@ The service listens to `TYPE_WINDOW_STATE_CHANGED`, `TYPE_WINDOW_CONTENT_CHANGED
 
 This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll).
 
-## Lock Home Feed — How It Works (Working, v1.1.0)
+## Lock Home Feed — How It Works (Working, v1.1.1)
 
 **Goal:** lock the For You feed so the user stays at the top (Stories only). Favorites sub-feed must remain scrollable; Reels untouched. **Do not touch the Reels-blocking code.**
 
-**Where it lives:** `WhitelistAccessibilityService.applyBlockHomeFeed()` is invoked from `TYPE_VIEW_SCROLLED`. Gates: `isInReelsViewer`, the Home button's `isSelected`/`isChecked` state, `isOnFavorites()`, and an at-top guard (`isFeedAtTop()`).
+**Where it lives:** `WhitelistAccessibilityService.applyBlockHomeFeed()` is invoked from `TYPE_VIEW_SCROLLED`, plus an evaluation pass (no press) on `TYPE_WINDOW_STATE_CHANGED`. Gates: `isInReelsViewer`, the Home button's `isSelected`/`isChecked` state, `isOnFavorites()`, and an at-top guard (`isFeedAtTop()`).
 
 **Mechanism:** when the feed is scrolled down, the service presses the bottom-nav **Home** button, which natively scrolls the feed back to the top. Loop protection:
 - "At top" is detected via the **Stories tray** (`findStoriesTray()`: a wide horizontal scrollable with `top > -400 && top < 600`, `width > 50%` of screen). Diagnostic data proved the tray exists at the top, scrolls up, and is then **removed entirely** from the accessibility tree, so tray present + visible (`bottom > 0 && top < bottom`) ⇒ at top.
@@ -110,15 +110,22 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 
 **History (dev6 → dev15, all non-functional):** Skip-Reels-in-Feed, Disable Autoplay, Auto-Open Favorites (all removed); Home-button bounce without a top-guard → pull-to-refresh loop; `ACTION_SCROLL_BACKWARD` (IG ignores it); `event.scrollY` gate (IG doesn't populate scrollY for feed scrolls). dev17 fixed it with the tray-based top guard + bypass catch above.
 
+**dev18 hotfix ("cold start"):** after closing & reopening Instagram the lock did not engage until the user tapped the bottom-nav Home. Two intertwined causes, both fixed:
+- The lock-home state machine (`lastBlockHomeTime`, `lastBounceAt`, `sawTopSinceBounce`) persisted across IG sessions. Now `TYPE_WINDOW_STATE_CHANGED` resets it and runs a no-press evaluation pass (`applyBlockHomeFeed(evaluateOnly = true)`) so a fresh session starts consistent and never presses during the initial (not-yet-rendered) layout.
+- On a freshly opened IG no nav tab is reported as `isSelected` yet, so the old "must be selected" gate skipped everything. New logic: if no other bottom-nav tab is selected (`isOtherNavTabSelected()` scans only the bottom band, y > 72% of screen), the feed is treated as Home.
+
 **Hard constraints (learned the hard way):**
 - Instagram does **not** populate `AccessibilityEvent.scrollY` for feed scrolls.
 - Tapping the Home tab re-selects it → pull-to-refresh → loop if you tap while already at top (hence the tray guard).
+- On a cold start Instagram may not report **any** bottom-nav tab as selected. The service treats the feed as Home only when the Home button exists AND no other nav tab in the bottom band (y > 72% of screen) is selected — so it never presses Home while the user is genuinely on Search/Reels/Shop/Profile.
 - An AccessibilityService cannot delete/modify IG views, only perform click/scroll/back actions or `GLOBAL_ACTION_BACK`.
 - Overlay approach was rejected by the product owner.
 
 **How to debug:** `adb logcat -s WhitelistService` (debug builds only; release logs nothing) and watch for:
 - `LockHome: pressed Home -> bounce to top (reload accepted)` — bounce fired (good).
 - `LockHome: at top (Stories tray visible), re-armed` — top guard tripped.
+- `LockHome: no nav tab selected yet, assuming Home (cold start)` — cold-start fallback used (evaluate pass re-arms the machine).
+- `LockHome: eval-only, would bounce ...` — window-change pass, not pressing (by design).
 - `LockHome: on Favorites, skip` / `in Reels viewer, skip` / `not on Home tab, skip` / `Home button not found` — other guards.
 
 ## Conventions
@@ -134,9 +141,9 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **`dev`** is for new features. It is never auto-merged into `main`; only an explicit merge (PR) promotes code to `main`.
 - **Dev releases** are cut as **pre-release** tags `vX.Y.Z-devN` (e.g. `v1.1.0-dev1`) on the `dev` branch, with the GitHub "pre-release" flag set. They do not affect `main`.
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
-- New features start at `1.1.0` on `dev`.
+- New features start at `1.2.0` on `dev` (`v1.1.0` is already released on `main`, `v1.1.1` is the closed-test hotfix).
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
-- **Current state:** `dev` is at `v1.1.0-dev17` (versionCode 26) and the production plan is `1.1.0` (versionCode 30, R8 minify on). Both features work on `dev` and in the production build. Keep `dev`'s `versionCode` above `main`'s when continuing work there (`main` is currently v1.0.5).
+- **Current state:** `main` is at **v1.1.1** (versionCode 31) — hotfix for the Play closed-testing track (closed test needs ≥12 testers × 14 days before production access; stable `v1.1.0` was already tagged/released on GitHub). `dev` continues at **v1.2.0-dev2** (versionCode 32). Keep `dev`'s `versionCode` above `main`'s when continuing work there.
 
 ## Publishing a Dev Build (release + APK)
 
