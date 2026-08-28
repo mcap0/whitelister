@@ -143,7 +143,7 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
 - New features start at `1.2.0` on `dev` (`v1.1.0` is already released on `main`, `v1.1.1` is the closed-test hotfix).
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
-- **Current state:** `main` is at **v1.1.1** (versionCode 31) — hotfix for the Play closed-testing track (closed test needs ≥12 testers × 14 days before production access; stable `v1.1.0` was already tagged/released on GitHub). `dev` continues at **v1.2.0-dev2** (versionCode 32). Keep `dev`'s `versionCode` above `main`'s when continuing work there.
+- **Current state:** `main` is at **v1.1.1** (versionCode 31) — hotfix for the Play closed-testing track (closed test needs ≥12 testers × 14 days before production access; stable `v1.1.0` was already tagged/released on GitHub). `dev` is **aligned with main at v1.1.1** (versionCode 31) because there are no new features ahead; when feature work starts on `dev` again, bump it above `main` (e.g. versionName `1.2.0-dev1`, versionCode 32).
 
 ## Publishing a Dev Build (release + APK)
 
