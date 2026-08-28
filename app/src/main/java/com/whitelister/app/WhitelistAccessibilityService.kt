@@ -94,7 +94,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         }
                     }
                 }
-                if (blockHomeEnabled) applyBlockHomeFeed()
+                if (blockHomeEnabled) applyBlockHomeFeed(event)
             }
         }
     }
@@ -285,7 +285,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return true
     }
 
-    private fun applyBlockHomeFeed() {
+    private fun applyBlockHomeFeed(event: AccessibilityEvent) {
         val now = System.currentTimeMillis()
         if (now - lastBlockHomeTime < BLOCK_HOME_THROTTLE_MS) return
 
@@ -312,6 +312,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 homeBtn.recycle()
                 return
             }
+            dumpScrollSignals(root, event)
             // Only bounce when actually scrolled down. Tapping Home at the top is
             // what caused the infinite pull-to-refresh loop, so skip it here.
             if (isFeedAtTop(root)) {
@@ -368,6 +369,67 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         scan(root, 0)
         return found
+    }
+
+    // ---- Phase 1 diagnostic: dump every scroll-position signal we can get, so we
+    // can pick the ONE that reliably tells "at top" vs "scrolled down". ----
+    private fun dumpScrollSignals(root: AccessibilityNodeInfo, event: AccessibilityEvent?) {
+        try {
+            val sb = StringBuilder("DIAG")
+            val src = event?.source
+            if (src != null) {
+                sb.append(" srcClass=").append(src.className)
+                sb.append(" [")
+                val srcb = Rect()
+                src.getBoundsInScreen(srcb)
+                sb.append("top=").append(srcb.top)
+                sb.append(" bot=").append(srcb.bottom)
+                sb.append(" vis=").append(src.isVisibleToUser)
+                sb.append("]")
+                src.recycle()
+            }
+            val screenW = getScreenWidth()
+            var horizontalCount = 0
+            fun scan(node: AccessibilityNodeInfo, depth: Int) {
+                if (depth > 20) return
+                if (node.isScrollable) {
+                    val b = Rect()
+                    node.getBoundsInScreen(b)
+                    if (b.width() > screenW * 0.5 && b.height() < b.width()) {
+                        if (horizontalCount < 5) {
+                            horizontalCount++
+                            sb.append(" [h").append(horizontalCount)
+                                .append(" top=").append(b.top)
+                                .append(" bot=").append(b.bottom)
+                                .append(" vis=").append(node.isVisibleToUser)
+                                .append("]")
+                        }
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { c -> scan(c, depth + 1); c.recycle() }
+                }
+            }
+            scan(root, 0)
+            sb.append(" horizontals=").append(horizontalCount)
+
+            val feed = findFeedScrollable(root)
+            sb.append(" feedFound=").append(feed != null)
+            if (feed != null) {
+                val first = feed.getChild(0)
+                if (first != null) {
+                    val fb = Rect()
+                    first.getBoundsInScreen(fb)
+                    sb.append(" feedChild0Top=").append(fb.top)
+                    first.recycle()
+                }
+                feed.recycle()
+            }
+            sb.append(" atTop=").append(isFeedAtTop(root))
+            Log.d(TAG, sb.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "DIAG error", e)
+        }
     }
 
     override fun onInterrupt() {
