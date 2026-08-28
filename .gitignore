@@ -43,6 +43,10 @@ captures/
 
 # Keystore files (keep .jks in repo for release builds)
 # *.jks
+# Local signing secrets — NEVER commit/push. Upload key keystore + props + cert.
+keystore/
+keystore.properties
+*.pem
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
