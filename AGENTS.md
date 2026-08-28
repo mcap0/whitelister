@@ -119,6 +119,7 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - Tapping the Home tab re-selects it → pull-to-refresh → loop if you tap while already at top (hence the tray guard).
 - On a cold start Instagram may not report **any** bottom-nav tab as selected. The service treats the feed as Home only when the Home button exists AND no other nav tab in the bottom band (y > 72% of screen) is selected — so it never presses Home while the user is genuinely on Search/Reels/Shop/Profile.
 - An AccessibilityService cannot delete/modify IG views, only perform click/scroll/back actions or `GLOBAL_ACTION_BACK`.
+- The **Instagram in-app browser** (`BrowserLiteInMainProcessIGActivity`) is a separate window that still reports package `com.instagram.android`, so both features can see its events. The service tracks it on `TYPE_WINDOW_STATE_CHANGED` from the event class name (`"inappbrowser"`), with a tree-scan fallback for `webview`/`browser` classes. While it is active, Reels blocking and Lock Home Feed are both skipped (**v1.1.2**) — otherwise browsing a website triggers a Reels `GLOBAL_ACTION_BACK` or a LockHome Home-press that bounces the user out of the page.
 - Overlay approach was rejected by the product owner.
 
 **How to debug:** `adb logcat -s WhitelistService` (debug builds only; release logs nothing) and watch for:
