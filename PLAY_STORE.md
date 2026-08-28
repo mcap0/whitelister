@@ -1,4 +1,4 @@
-# Play Store Submission — Accessibility Declaration (v1.0.5)
+# Play Store Submission — Accessibility Declaration (v1.1.0)
 
 Whitelister uses `AccessibilityService`. It is NOT declared as an accessibility tool
 (`isAccessibilityTool` is not set), so the app provides an in-app prominent disclosure
@@ -16,10 +16,11 @@ accessibility declaration.
 1. Why does your app need to use the Accessibility Services API?
    - Select: **App functionality**
 2. Describe one core feature that requires the AccessibilityService API:
-   - "Whitelister uses the AccessibilityService to read Instagram's on-screen UI to detect
-    when the user is viewing Reels (and prevent scrolling between them), and to detect reels
-    that appear inline in the feed and scroll past them. All processing is on-device; no
-    data is collected."
+   - "Whitelister uses the AccessibilityService to read Instagram's on-screen UI for two
+     user-controlled purposes: (1) detect when the user is viewing Reels and prevent
+     scrolling between them, and (2) detect when the user has scrolled the Home feed
+     below the Stories and bounce the feed back to the top. All processing is on-device;
+     no data is collected."
 3. Data collected via the API:
    - **None.** The view hierarchy/text is processed in memory on-device and is never
     stored, logged, or transmitted. The app has no INTERNET permission, no analytics,

@@ -1,17 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Whitelister</string>
-    <string name="accessibility_service_description">Whitelister uses the AccessibilityService to detect Instagram Reels and prevent scrolling between them, to lock the Home feed so only Stories show, and to open your Favorites feed when Instagram launches. All processing happens on your device; no data leaves the app.</string>
+    <string name="accessibility_service_description">Whitelister uses the AccessibilityService to detect Instagram Reels and prevent scrolling between them, and to lock the Instagram Home feed so only Stories are shown. All processing happens on your device; no data leaves the app.</string>
 
     <string name="consent_title">Accessibility Service Consent</string>
-    <string name="consent_body">Whitelister uses Android\'s AccessibilityService to interact with Instagram.\n\nThe service reads Instagram\'s on-screen interface — including the view structure and visible text such as account names and captions — but ONLY to detect when you are viewing Reels, to prevent scrolling between them, to lock the Home feed so only Stories are shown, and to open your Favorites feed on launch.\n\nAll processing happens on your device. Nothing is stored, logged, or sent anywhere. Whitelister has no internet access, no analytics, and no ads.\n\nBy tapping \"I Accept\" you consent to the use of the AccessibilityService as described in our Privacy Policy.</string>
+    <string name="consent_body">Whitelister uses Android\'s AccessibilityService to interact with Instagram.\n\nThe service reads Instagram\'s on-screen interface — including the view structure and visible text — ONLY for two purposes:\n\n1. Detect when you are viewing Reels, so it can prevent scrolling between them.\n2. Detect when you have scrolled down the For You Home feed past the Stories, so it can bounce the feed back to the top.\n\nAll processing happens on your device. Nothing is stored, logged, or sent anywhere. Whitelister has no internet access, no analytics, and no ads.\n\nBy tapping "I Accept" you consent to the use of the AccessibilityService as described in our Privacy Policy.</string>
     <string name="consent_accept">I Accept</string>
     <string name="consent_decline">Decline</string>
     <string name="view_privacy_policy">View Privacy Policy</string>
 
     <string name="privacy_policy_title">Privacy Policy</string>
-    <string name="privacy_policy_text">Whitelister Privacy Policy\n\nWhitelister is an Android app that helps you reduce time spent on Instagram Reels, by using Android\'s AccessibilityService.\n\nWhat data the AccessibilityService accesses\nTo function, Whitelister\'s AccessibilityService reads the on-screen user interface of Instagram (com.instagram.android), including the view hierarchy, view identifiers, and visible text such as account names and post captions. This access is required solely to detect when you are viewing Reels, to prevent scrolling between them, and to skip reels that appear in your feed by scrolling past them.\n\nHow the data is used\nAll processing happens locally on your device, in memory, at the moment the screen is shown. When a reel is detected, Whitelister may prevent scrolling between reels, keep the Home feed locked to Stories, or open your Favorites feed. Whitelister does not store, log, or transmit any of this information.\n\nData collection and sharing\nWhitelister collects no personal data. It does not use the internet, contains no analytics SDKs, and displays no advertisements. No data is shared with the developer or any third party.\n\nYour controls\nYou can disable the AccessibilityService at any time in Android Settings &gt; Accessibility. Uninstalling the app removes all local preferences.\n\nContact\nFor questions, contact the developer via the project repository.\n\nLast updated: 2026-08-27</string>
+    <string name="privacy_policy_text">Whitelister Privacy Policy\n\nWhitelister is an Android app that helps you reduce time spent on Instagram Reels by using Android\'s AccessibilityService.\n\nWhat data the AccessibilityService accesses\nTo function, Whitelister\'s AccessibilityService reads the on-screen user interface of Instagram (com.instagram.android), including the view hierarchy, view identifiers, and visible text. This access is required solely to detect when you are viewing Reels (to prevent scrolling between them) and to detect when you have scrolled the Home feed below the Stories (to bounce the feed back so only Stories are shown).\n\nHow the data is used\nAll processing happens locally on your device, in memory, at the moment the screen is shown. Whitelister does not store, log, or transmit any of this information.\n\nData collection and sharing\nWhitelister collects no personal data. It does not use the internet, contains no analytics SDKs, and displays no advertisements. No data is shared with the developer or any third party.\n\nYour controls\nYou can disable the AccessibilityService at any time in Android Settings &gt; Accessibility. Uninstalling the app removes all local preferences.\n\nContact\nFor questions, contact the developer via the project repository.\n\nLast updated: 2026-08-28</string>
 
     <string name="block_home_feed_title">Lock Home Feed (Stories only)</string>
     <string name="block_home_feed_summary">On For You, keeps you at the top so only Stories show; scroll is bounced back</string>
+
+    <string name="accessibility_service_title">Accessibility Service</string>
+    <string name="accessibility_enabled">Enabled</string>
+    <string name="accessibility_disabled">Disabled — Tap to enable</string>
+    <string name="service_active">Service Active</string>
+    <string name="enable_service">Enable Service</string>
+    <string name="instagram_features_title">Instagram</string>
+    <string name="remove_reels_title">Remove Reels</string>
+    <string name="remove_reels_summary">Blocks scrolling between reels</string>
+    <string name="close">Close</string>
+    <string name="privacy_info">Privacy &amp; info</string>
 </resources>

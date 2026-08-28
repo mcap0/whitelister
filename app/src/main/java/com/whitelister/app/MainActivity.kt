@@ -18,10 +18,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.whitelister.app.ui.theme.WhitelisterTheme
 
 class MainActivity : ComponentActivity() {
@@ -122,7 +122,7 @@ fun PolicyScreen(onClose: () -> Unit) {
             title = { Text(getString(context, R.string.privacy_policy_title)) },
             actions = {
                 IconButton(onClick = onClose) {
-                    Text("Close")
+                    Text(getString(context, R.string.close))
                 }
             }
         )
@@ -172,10 +172,13 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
             .navigationBarsPadding()
     ) {
         TopAppBar(
-            title = { Text("Whitelister") },
+            title = { Text(getString(context, R.string.app_name)) },
             actions = {
                 IconButton(onClick = onOpenPolicy) {
-                    Icon(Icons.Filled.Info, contentDescription = "Privacy & info")
+                    Icon(
+                        Icons.Filled.Info,
+                        contentDescription = getString(context, R.string.privacy_info)
+                    )
                 }
             }
         )
@@ -195,11 +198,15 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Accessibility Service",
+                        text = getString(context, R.string.accessibility_service_title),
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = if (isAccessibilityEnabled) "Enabled" else "Disabled — Tap to enable",
+                        text = if (isAccessibilityEnabled) {
+                            getString(context, R.string.accessibility_enabled)
+                        } else {
+                            getString(context, R.string.accessibility_disabled)
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isAccessibilityEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                     )
@@ -211,7 +218,13 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (isAccessibilityEnabled) "Service Active" else "Enable Service")
+                        Text(
+                            if (isAccessibilityEnabled) {
+                                getString(context, R.string.service_active)
+                            } else {
+                                getString(context, R.string.enable_service)
+                            }
+                        )
                     }
                 }
             }
@@ -225,7 +238,7 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Instagram",
+                        text = getString(context, R.string.instagram_features_title),
                         style = MaterialTheme.typography.titleMedium
                     )
 
@@ -236,9 +249,12 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Remove Reels", style = MaterialTheme.typography.bodyLarge)
                             Text(
-                                "Blocks scrolling between reels",
+                                getString(context, R.string.remove_reels_title),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                getString(context, R.string.remove_reels_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
@@ -281,8 +297,6 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
                     }
 
                     HorizontalDivider()
-
-                    // (Auto-Open Favorites removed; only Lock Home Feed is provided)
                 }
             }
         }

@@ -10,6 +10,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
+@Suppress("DEPRECATION")
 class WhitelistAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -20,12 +21,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val BLOCK_HOME_THROTTLE_MS = 1000L
         private const val REELS_GRACE_MS = 1000L
         private const val BOUNCE_SETTLE_MS = 2000L
-
-        var isRunning = false
-            private set
-
-        var instance: WhitelistAccessibilityService? = null
-            private set
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -37,10 +32,16 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var lastBounceAt = 0L
     private var sawTopSinceBounce = false
 
+    private fun logD(message: String) {
+        if (BuildConfig.DEBUG) Log.d(TAG, message)
+    }
+
+    private fun logE(message: String, throwable: Throwable) {
+        if (BuildConfig.DEBUG) Log.e(TAG, message, throwable)
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        isRunning = true
-        instance = this
 
         val info = AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -52,7 +53,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         setServiceInfo(info)
 
-        Log.d(TAG, "WhitelistAccessibilityService connected")
+        logD("WhitelistAccessibilityService connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -93,7 +94,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         if (sinceEnter >= REELS_GRACE_MS) {
                             blockReels()
                         } else {
-                            Log.d(TAG, "Reels: within grace ($sinceEnter ms), ignore scroll")
+                            logD("Reels: within grace ($sinceEnter ms), ignore scroll")
                         }
                     }
                 }
@@ -115,11 +116,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
             // emitted by simply opening a reel doesn't immediately back out.
             if (isInReelsViewer && !wasInViewer) {
                 reelsEnteredAt = System.currentTimeMillis()
-                Log.d(TAG, "Reels viewer entered; grace until ${reelsEnteredAt + REELS_GRACE_MS}")
+                logD("Reels viewer entered; grace until ${reelsEnteredAt + REELS_GRACE_MS}")
             }
-            Log.d(TAG, "Reels viewer detection: $isInReelsViewer")
+            logD("Reels viewer detection: $isInReelsViewer")
         } catch (e: Exception) {
-            Log.e(TAG, "Error detecting reels viewer", e)
+            logE("Error detecting reels viewer", e)
         }
     }
 
@@ -128,7 +129,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         val viewId = node.viewIdResourceName
         if (viewId != null && viewId.contains("clips_tab") && node.isSelected) {
-            Log.d(TAG, "Reels TAB detected: $viewId isSelected=true")
+            logD("Reels TAB detected: $viewId isSelected=true")
             return true
         }
 
@@ -149,7 +150,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (viewId != null) {
             val isReelContainer = viewId.contains("clips") || viewId.contains("reel")
             if (isReelContainer && isNodeFullscreen(node)) {
-                Log.d(TAG, "Fullscreen reel viewer detected: $viewId")
+                logD("Fullscreen reel viewer detected: $viewId")
                 return true
             }
         }
@@ -189,9 +190,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
         handler.post {
             try {
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                Log.d(TAG, "Reels blocked - BACK action performed")
+                logD("Reels blocked - BACK action performed")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to perform back action", e)
+                logE("Failed to perform back action", e)
             }
         }
         isInReelsViewer = false
@@ -262,7 +263,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         // Never interfere while a Reels viewer is open (let Reels blocking handle it).
         if (isInReelsViewer) {
-            Log.d(TAG, "LockHome: in Reels viewer, skip")
+            logD("LockHome: in Reels viewer, skip")
             return
         }
 
@@ -270,16 +271,16 @@ class WhitelistAccessibilityService : AccessibilityService() {
         try {
             val homeBtn = findBottomNavButton(root, "home") ?: findBottomNavButton(root, "casa")
             if (homeBtn == null) {
-                Log.d(TAG, "LockHome: Home button not found")
+                logD("LockHome: Home button not found")
                 return
             }
             if (!homeBtn.isSelected && !homeBtn.isChecked) {
-                Log.d(TAG, "LockHome: not on Home tab, skip")
+                logD("LockHome: not on Home tab, skip")
                 homeBtn.recycle()
                 return
             }
             if (isOnFavorites(root)) {
-                Log.d(TAG, "LockHome: on Favorites, skip")
+                logD("LockHome: on Favorites, skip")
                 homeBtn.recycle()
                 return
             }
@@ -287,7 +288,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
             // the top is what causes the pull-to-refresh loop).
             if (isFeedAtTop(root)) {
                 sawTopSinceBounce = true
-                Log.d(TAG, "LockHome: at top (Stories tray visible), re-armed")
+                logD("LockHome: at top (Stories tray visible), re-armed")
                 homeBtn.recycle()
                 return
             }
@@ -295,7 +296,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
             // since the last bounce, this is a normal scrolled-down -> bounce.
             if (sawTopSinceBounce) {
                 if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
-                    Log.d(TAG, "LockHome: settling after bounce, hold")
+                    logD("LockHome: settling after bounce, hold")
                     homeBtn.recycle()
                     return
                 }
@@ -303,7 +304,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 lastBounceAt = now
                 sawTopSinceBounce = false
                 homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                Log.d(TAG, "LockHome: pressed Home -> bounce to top (reload accepted)")
+                logD("LockHome: pressed Home -> bounce to top (reload accepted)")
                 homeBtn.recycle()
                 return
             }
@@ -312,17 +313,17 @@ class WhitelistAccessibilityService : AccessibilityService() {
             // Lock them again (only after the settle window so the return animation
             // of the previous bounce does not cause a press of its own).
             if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
-                Log.d(TAG, "LockHome: settling after bounce, hold")
+                logD("LockHome: settling after bounce, hold")
                 homeBtn.recycle()
                 return
             }
             lastBlockHomeTime = now
             lastBounceAt = now
             homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Log.d(TAG, "LockHome: bypass detected -> pressed Home (lock again)")
+            logD("LockHome: bypass detected -> pressed Home (lock again)")
             homeBtn.recycle()
         } catch (e: Exception) {
-            Log.e(TAG, "Error in block home feed", e)
+            logE("Error in block home feed", e)
         } finally {
             root.recycle()
         }
@@ -369,13 +370,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        Log.d(TAG, "WhitelistAccessibilityService interrupted")
+        logD("WhitelistAccessibilityService interrupted")
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        isRunning = false
-        instance = null
-        Log.d(TAG, "WhitelistAccessibilityService destroyed")
+        logD("WhitelistAccessibilityService destroyed")
     }
 }
