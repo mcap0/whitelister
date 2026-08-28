@@ -19,6 +19,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val FULLSCREEN_RATIO = 0.7f
         private const val BLOCK_HOME_THROTTLE_MS = 1000L
         private const val REELS_GRACE_MS = 1000L
+        private const val BOUNCE_SETTLE_MS = 2000L
 
         var isRunning = false
             private set
@@ -33,6 +34,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var lastBlockHomeTime = 0L
     private var isInReelsViewer = false
     private var reelsEnteredAt = 0L
+    private var lastBounceAt = 0L
+    private var sawTopSinceBounce = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -94,7 +97,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                         }
                     }
                 }
-                if (blockHomeEnabled) applyBlockHomeFeed(event)
+                if (blockHomeEnabled) applyBlockHomeFeed()
             }
         }
     }
@@ -196,12 +199,15 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     // ---- Lock Home feed: keep the user at the top (Stories only) on the For You tab ----
     // Bounces by pressing the bottom-nav Home button (which on Instagram natively
-    // scrolls the feed back to the top — a reload is accepted). The infinite
-    // reload loop is avoided by ONLY tapping Home when the feed is genuinely
-    // scrolled DOWN. We detect "at top" via the Stories tray: it is visible at the
-    // top of the screen when the feed is at the top, and scrolls off when you go
-    // down. Tapping Home while already at the top is what triggered the refresh
-    // loop, so we skip the tap in that state.
+    // scrolls the feed back to the top). "At top" is detected via the Stories tray
+    // (a wide horizontal scrollable): diagnostic data showed it exists at the top
+    // of the feed, scrolls up, and is REMOVED from the accessibility tree entirely
+    // once you scroll past it. So tray present + visible -> at top, do nothing;
+    // tray gone -> scrolled down, press Home.
+    // Loop protection: after a bounce we hold for BOUNCE_SETTLE_MS and only press
+    // again after the tray has been SEEN at top again. If the user keeps scrolling
+    // (bypass) and the tray never comes back, we detect that and press Home too,
+    // so the lock fights back while the feed never reaches a settled top.
 
     private fun getScreenWidth(): Int {
         val metrics = DisplayMetrics()
@@ -220,7 +226,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 val w = b.width()
                 val h = b.height()
                 val isHorizontal = w > h
-                val nearTop = b.top in 0..400
+                // >= 400px above the app bar counts as "still at/near the top" so a
+                // partially-scrolled-off tray is still recognised until it is gone.
+                val nearTop = b.top > -400 && b.top < 600
                 val wide = w > screenW * 0.5
                 if (isHorizontal && nearTop && wide) {
                     best = node
@@ -235,57 +243,20 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return best
     }
 
-    private fun findFeedScrollable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var best: AccessibilityNodeInfo? = null
-        var bestH = 0
-        fun scan(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > 20) return
-            if (node.isScrollable) {
-                val b = Rect()
-                node.getBoundsInScreen(b)
-                val h = b.height()
-                if (h > bestH) {
-                    bestH = h
-                    best = node
-                }
-            }
-            for (i in 0 until node.childCount) {
-                val c = node.getChild(i) ?: continue
-                scan(c, depth + 1)
-                c.recycle()
-            }
-        }
-        scan(root, 0)
-        return best
-    }
-
-    // True when the feed is already at the top (so a Home tap would only refresh).
+    // True when the feed is already at the top (so the service must not press Home).
     private fun isFeedAtTop(root: AccessibilityNodeInfo): Boolean {
         val tray = findStoriesTray(root)
         if (tray != null) {
             val b = Rect()
             tray.getBoundsInScreen(b)
-            val visible = b.bottom > 0
+            val visible = b.bottom > 0 && b.top < b.bottom
             tray.recycle()
             return visible
         }
-        // Fallback: a feed child sitting at/near the top of the screen means at top.
-        val feed = findFeedScrollable(root)
-        val child = feed?.getChild(0)
-        if (child != null) {
-            val b = Rect()
-            child.getBoundsInScreen(b)
-            val top = b.top
-            feed?.recycle()
-            child.recycle()
-            return top >= 80
-        }
-        feed?.recycle()
-        // Can't tell — be conservative and treat as at top to avoid a refresh loop.
-        return true
+        return false
     }
 
-    private fun applyBlockHomeFeed(event: AccessibilityEvent) {
+    private fun applyBlockHomeFeed() {
         val now = System.currentTimeMillis()
         if (now - lastBlockHomeTime < BLOCK_HOME_THROTTLE_MS) return
 
@@ -312,17 +283,43 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 homeBtn.recycle()
                 return
             }
-            dumpScrollSignals(root, event)
-            // Only bounce when actually scrolled down. Tapping Home at the top is
-            // what caused the infinite pull-to-refresh loop, so skip it here.
+            // At the top: tray present and visible -> never press here (a press at
+            // the top is what causes the pull-to-refresh loop).
             if (isFeedAtTop(root)) {
-                Log.d(TAG, "LockHome: at top (Stories tray visible) -> skip, avoid reload loop")
+                sawTopSinceBounce = true
+                Log.d(TAG, "LockHome: at top (Stories tray visible), re-armed")
+                homeBtn.recycle()
+                return
+            }
+            // Past the Stories (tray gone). If the tray has been observed at top
+            // since the last bounce, this is a normal scrolled-down -> bounce.
+            if (sawTopSinceBounce) {
+                if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
+                    Log.d(TAG, "LockHome: settling after bounce, hold")
+                    homeBtn.recycle()
+                    return
+                }
+                lastBlockHomeTime = now
+                lastBounceAt = now
+                sawTopSinceBounce = false
+                homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                Log.d(TAG, "LockHome: pressed Home -> bounce to top (reload accepted)")
+                homeBtn.recycle()
+                return
+            }
+            // Bypass catch: the tray has NOT been seen at top since the last bounce,
+            // yet we are not at top either — the user scrolled through the snap-back.
+            // Lock them again (only after the settle window so the return animation
+            // of the previous bounce does not cause a press of its own).
+            if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
+                Log.d(TAG, "LockHome: settling after bounce, hold")
                 homeBtn.recycle()
                 return
             }
             lastBlockHomeTime = now
+            lastBounceAt = now
             homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Log.d(TAG, "LockHome: pressed Home -> bounce to top (reload accepted)")
+            Log.d(TAG, "LockHome: bypass detected -> pressed Home (lock again)")
             homeBtn.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Error in block home feed", e)
@@ -369,67 +366,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         scan(root, 0)
         return found
-    }
-
-    // ---- Phase 1 diagnostic: dump every scroll-position signal we can get, so we
-    // can pick the ONE that reliably tells "at top" vs "scrolled down". ----
-    private fun dumpScrollSignals(root: AccessibilityNodeInfo, event: AccessibilityEvent?) {
-        try {
-            val sb = StringBuilder("DIAG")
-            val src = event?.source
-            if (src != null) {
-                sb.append(" srcClass=").append(src.className)
-                sb.append(" [")
-                val srcb = Rect()
-                src.getBoundsInScreen(srcb)
-                sb.append("top=").append(srcb.top)
-                sb.append(" bot=").append(srcb.bottom)
-                sb.append(" vis=").append(src.isVisibleToUser)
-                sb.append("]")
-                src.recycle()
-            }
-            val screenW = getScreenWidth()
-            var horizontalCount = 0
-            fun scan(node: AccessibilityNodeInfo, depth: Int) {
-                if (depth > 20) return
-                if (node.isScrollable) {
-                    val b = Rect()
-                    node.getBoundsInScreen(b)
-                    if (b.width() > screenW * 0.5 && b.height() < b.width()) {
-                        if (horizontalCount < 5) {
-                            horizontalCount++
-                            sb.append(" [h").append(horizontalCount)
-                                .append(" top=").append(b.top)
-                                .append(" bot=").append(b.bottom)
-                                .append(" vis=").append(node.isVisibleToUser)
-                                .append("]")
-                        }
-                    }
-                }
-                for (i in 0 until node.childCount) {
-                    node.getChild(i)?.let { c -> scan(c, depth + 1); c.recycle() }
-                }
-            }
-            scan(root, 0)
-            sb.append(" horizontals=").append(horizontalCount)
-
-            val feed = findFeedScrollable(root)
-            sb.append(" feedFound=").append(feed != null)
-            if (feed != null) {
-                val first = feed.getChild(0)
-                if (first != null) {
-                    val fb = Rect()
-                    first.getBoundsInScreen(fb)
-                    sb.append(" feedChild0Top=").append(fb.top)
-                    first.recycle()
-                }
-                feed.recycle()
-            }
-            sb.append(" atTop=").append(isFeedAtTop(root))
-            Log.d(TAG, sb.toString())
-        } catch (e: Exception) {
-            Log.e(TAG, "DIAG error", e)
-        }
     }
 
     override fun onInterrupt() {
