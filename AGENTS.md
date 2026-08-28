@@ -134,9 +134,9 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **`dev`** is for new features. It is never auto-merged into `main`; only an explicit merge (PR) promotes code to `main`.
 - **Dev releases** are cut as **pre-release** tags `vX.Y.Z-devN` (e.g. `v1.1.0-dev1`) on the `dev` branch, with the GitHub "pre-release" flag set. They do not affect `main`.
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
-- New features start at `1.1.0` on `dev`.
+- New features start at `1.2.0` on `dev` (`v1.1.0` is already released on `main`).
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
-- **Current state:** `dev` is at `v1.1.0-dev17` (versionCode 26) and the production plan is `1.1.0` (versionCode 30, R8 minify on). Both features work on `dev` and in the production build. Keep `dev`'s `versionCode` above `main`'s when continuing work there (`main` is currently v1.0.5).
+- **Current state:** `main` is at **v1.1.0** (versionCode 30) — released stable (tag `v1.1.0`) with both features. `dev` continues at **v1.2.0-dev1** (versionCode 31). Keep `dev`'s `versionCode` above `main`'s when continuing work there (`main` is at v1.1.0 / versionCode 30).
 
 ## Publishing a Dev Build (release + APK)
 
