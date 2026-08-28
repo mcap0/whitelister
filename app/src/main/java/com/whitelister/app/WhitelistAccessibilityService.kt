@@ -70,6 +70,16 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 } else {
                     isInReelsViewer = false
                 }
+                if (blockHomeEnabled) {
+                    // A new Instagram window means a fresh session: never inherit
+                    // stale lock-home state from before. Reset the transient fields
+                    // and evaluate once (without pressing) so the machine starts
+                    // from a consistent state on the very first interaction.
+                    lastBlockHomeTime = 0
+                    lastBounceAt = 0
+                    sawTopSinceBounce = false
+                    applyBlockHomeFeed(evaluateOnly = true)
+                }
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (reelsEnabled) {
@@ -216,6 +226,45 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return metrics.widthPixels
     }
 
+    private fun getScreenHeight(): Int {
+        val metrics = DisplayMetrics()
+        getSystemService(android.view.WindowManager::class.java)?.defaultDisplay?.getMetrics(metrics)
+        return metrics.heightPixels
+    }
+
+    // True when a bottom-nav tab other than Home is the selected one. Only nodes in
+    // the bottom band of the screen count, so feed elements that happen to mention
+    // matching words (e.g. "profile", "search") cannot be mistaken for the nav bar.
+    private fun isOtherNavTabSelected(root: AccessibilityNodeInfo): Boolean {
+        val screenH = getScreenHeight()
+        val otherLabels = listOf(
+            "search", "ricerca", "cerca",
+            "reel", "clips",
+            "shop", "negozio",
+            "profile", "profilo"
+        )
+        var selected = false
+        fun scan(node: AccessibilityNodeInfo, depth: Int) {
+            if (selected || depth > 20) return
+            val cd = node.contentDescription?.toString()?.lowercase()
+            if (cd != null && otherLabels.any { cd.contains(it) } && (node.isSelected || node.isChecked)) {
+                val b = Rect()
+                node.getBoundsInScreen(b)
+                if (!b.isEmpty && b.top > screenH * 0.72f) {
+                    selected = true
+                    return
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val c = node.getChild(i) ?: continue
+                scan(c, depth + 1)
+                c.recycle()
+            }
+        }
+        scan(root, 0)
+        return selected
+    }
+
     private fun findStoriesTray(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val screenW = getScreenWidth()
         var best: AccessibilityNodeInfo? = null
@@ -257,7 +306,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun applyBlockHomeFeed() {
+    private fun applyBlockHomeFeed(evaluateOnly: Boolean = false) {
         val now = System.currentTimeMillis()
         if (now - lastBlockHomeTime < BLOCK_HOME_THROTTLE_MS) return
 
@@ -274,10 +323,18 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 logD("LockHome: Home button not found")
                 return
             }
-            if (!homeBtn.isSelected && !homeBtn.isChecked) {
+            val homeSelected = homeBtn.isSelected || homeBtn.isChecked
+            val otherTabSelected = !homeSelected && isOtherNavTabSelected(root)
+            if (!homeSelected && otherTabSelected) {
                 logD("LockHome: not on Home tab, skip")
                 homeBtn.recycle()
                 return
+            }
+            if (!homeSelected && !otherTabSelected) {
+                // Cold-start quirk: on a freshly opened Instagram no nav tab is
+                // reported as selected yet, but the Home button exists and no other
+                // tab is selected, so treat the feed as Home.
+                logD("LockHome: no nav tab selected yet, assuming Home (cold start)")
             }
             if (isOnFavorites(root)) {
                 logD("LockHome: on Favorites, skip")
@@ -300,6 +357,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
                     homeBtn.recycle()
                     return
                 }
+                if (evaluateOnly) {
+                    logD("LockHome: eval-only, would bounce to top")
+                    homeBtn.recycle()
+                    return
+                }
                 lastBlockHomeTime = now
                 lastBounceAt = now
                 sawTopSinceBounce = false
@@ -314,6 +376,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
             // of the previous bounce does not cause a press of its own).
             if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
                 logD("LockHome: settling after bounce, hold")
+                homeBtn.recycle()
+                return
+            }
+            if (evaluateOnly) {
+                logD("LockHome: eval-only, would bounce (bypass)")
                 homeBtn.recycle()
                 return
             }
