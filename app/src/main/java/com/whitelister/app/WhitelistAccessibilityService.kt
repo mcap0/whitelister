@@ -31,6 +31,10 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var reelsEnteredAt = 0L
     private var lastBounceAt = 0L
     private var sawTopSinceBounce = false
+    // True while the Instagram in-app browser (BrowserLiteInMainProcessIGActivity) is
+    // the active window. Kept in sync on TYPE_WINDOW_STATE_CHANGED so neither Reels
+    // blocking nor Lock Home Feed can act while the user browses an external website.
+    private var inIgBrowser = false
 
     private fun logD(message: String) {
         if (BuildConfig.DEBUG) Log.d(TAG, message)
@@ -65,6 +69,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                inIgBrowser = event.className?.toString()?.
+                    lowercase()?.contains("inappbrowser") == true
                 if (reelsEnabled) {
                     detectReelsViewer()
                 } else {
@@ -114,11 +120,20 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun detectReelsViewer() {
+        if (isIgBrowserActive(null)) {
+            isInReelsViewer = false
+            return
+        }
         val wasInViewer = isInReelsViewer
         isInReelsViewer = false
 
         try {
             val rootNode = getRootInActiveWindow() ?: return
+            if (isIgBrowserActive(rootNode)) {
+                isInReelsViewer = false
+                rootNode.recycle()
+                return
+            }
             isInReelsViewer = isReelsTabSelected(rootNode, 0) ||
                     isFullscreenReelViewer(rootNode, 0)
             rootNode.recycle()
@@ -192,17 +207,46 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return (nodeArea / screenArea) >= FULLSCREEN_RATIO
     }
 
+    // True when the Instagram in-app browser is on screen. The activity-level state
+    // (tracked from TYPE_WINDOW_STATE_CHANGED class names) covers the normal case;
+    // the tree scan is a fallback for events that arrive without a preceding window
+    // change, matching the browser's WebView classes or its BrowserLite activity name.
+    private fun isIgBrowserActive(root: AccessibilityNodeInfo?): Boolean {
+        if (inIgBrowser) return true
+        return root?.let { containsBrowserClass(it, 0) } ?: false
+    }
+
+    private fun containsBrowserClass(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 25) return false
+        val cls = node.className?.toString()?.lowercase()
+        if (cls != null && (cls.contains("webview") || cls.contains("browser"))) return true
+        for (i in 0 until node.childCount) {
+            val c = node.getChild(i) ?: continue
+            val found = containsBrowserClass(c, depth + 1)
+            c.recycle()
+            if (found) return true
+        }
+        return false
+    }
+
     private fun blockReels() {
         val now = System.currentTimeMillis()
         if (now - lastReelsBlockTime < REELS_COOLDOWN_MS) return
 
         lastReelsBlockTime = now
         handler.post {
+            var root: AccessibilityNodeInfo? = null
             try {
+                root = getRootInActiveWindow()
+                if (isIgBrowserActive(root)) {
+                    return@post
+                }
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 logD("Reels blocked - BACK action performed")
             } catch (e: Exception) {
                 logE("Failed to perform back action", e)
+            } finally {
+                root?.recycle()
             }
         }
         isInReelsViewer = false
@@ -310,6 +354,13 @@ class WhitelistAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastBlockHomeTime < BLOCK_HOME_THROTTLE_MS) return
 
+        // Never interfere while the in-app browser is open: the bottom-nav "home"
+        // button can be present behind/above the browser (or a web "home" element can
+        // match), so pressing here would bounce the user out of the website.
+        if (isIgBrowserActive(null)) {
+            return
+        }
+
         // Never interfere while a Reels viewer is open (let Reels blocking handle it).
         if (isInReelsViewer) {
             logD("LockHome: in Reels viewer, skip")
@@ -318,6 +369,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         val root = getRootInActiveWindow() ?: return
         try {
+            if (isIgBrowserActive(root)) {
+                return
+            }
             val homeBtn = findBottomNavButton(root, "home") ?: findBottomNavButton(root, "casa")
             if (homeBtn == null) {
                 logD("LockHome: Home button not found")
