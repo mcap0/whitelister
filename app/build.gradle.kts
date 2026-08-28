@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -8,6 +10,13 @@ android {
     namespace = "com.whitelister.app"
     compileSdk = 35
 
+    val keystorePropsFile = rootProject.file("keystore.properties")
+    val keystoreProperties = Properties()
+    val hasSigning = keystorePropsFile.exists()
+    if (hasSigning) {
+        keystoreProperties.load(keystorePropsFile.inputStream())
+    }
+
     defaultConfig {
         applicationId = "com.whitelister.app"
         minSdk = 30
@@ -16,10 +25,22 @@ android {
         versionName = "1.1.0"
     }
 
+    signingConfigs {
+        if (hasSigning) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (hasSigning) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
