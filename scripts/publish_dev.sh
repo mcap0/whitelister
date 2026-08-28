@@ -19,6 +19,14 @@ GITHUB_PAT="${GITHUB_PAT:-}"
 OWNER="${OWNER:-mcap0}"
 REPO="${REPO:-whitelister}"
 
+# Allow a local, git-ignored secrets file (.env.local) so the PAT does not have
+# to be exported manually. It is NEVER committed (see .gitignore).
+if [ -z "$GITHUB_PAT" ] && [ -f "$(dirname "$0")/../.env.local" ]; then
+  set -a
+  . "$(dirname "$0")/../.env.local"
+  set +a
+fi
+
 if [ -z "$GITHUB_PAT" ]; then
   echo "ERROR: GITHUB_PAT is not set. Export it before running (do NOT hardcode it in any file):" >&2
   echo '  export GITHUB_PAT=github_pat_xxx   # supplied by the user each run' >&2

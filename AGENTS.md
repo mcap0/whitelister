@@ -150,11 +150,12 @@ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 export ANDROID_HOME=/opt/android-sdk
 ```
 - Must be on the `dev` branch.
-- The GitHub PAT is a SECRET. It is **never** written into any file or committed. Pass it at runtime:
+- The GitHub PAT is a SECRET. It is **never** committed. Pass it at runtime:
   ```bash
   export GITHUB_PAT=github_pat_xxx   # supplied by the user each run; do NOT hardcode
   ```
-  If `GITHUB_PAT` is unset, abort and ask the user for it. (Repo is public → a leaked token is auto-revoked.)
+  Or store it once in a local `.env.local` (git-ignored — see `.gitignore`) as `GITHUB_PAT=...`; `scripts/publish_dev.sh` auto-sources that file. **The `.env.local` file itself must never be committed or pushed.**
+  If `GITHUB_PAT` is still unset, abort and ask the user for it. (Repo is public → a leaked token is auto-revoked.)
 
 ### Steps
 1. **Bump version** in `app/build.gradle.kts`: `versionCode` must stay **higher than `main`**; `versionName` → `1.1.0-devN` (increment N).

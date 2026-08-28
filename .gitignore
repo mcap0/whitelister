@@ -74,3 +74,9 @@ lint/tmp/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local secrets — NEVER commit/push. Contains the GitHub PAT for publishing.
+# The publish script auto-sources this file; keep it out of version control.
+.env.local
+.env
+*.env.local
