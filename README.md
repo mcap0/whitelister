@@ -4,18 +4,18 @@ Android app to reclaim control over social media. Starts with Instagram.
 
 ## Features
 
-### Remove Reels (Working)
-Blocks scrolling between Instagram Reels. You can view a single reel by tapping, but horizontal/vertical scrolling between reels is blocked. When a scroll is detected in the Reels tab, the app performs a back action to keep you on the current reel.
+### Remove Reels — Working (stable)
+Blocks scrolling between Instagram Reels. You can view a single reel by tapping, but horizontal/vertical scrolling between reels is blocked. When a scroll is detected in the Reels tab, the app performs a back action to keep you on the current reel. **This feature works and must not be modified.**
 
-### Whitelist Feed (In Progress)
-Filter your Instagram feed to only show posts from whitelisted accounts. This feature is currently under development.
+### Lock Home Feed — Not Working (dev branch only)
+Keeps you at the top of the Instagram **For You** feed (Stories only) by bouncing any scroll back to the top; the **Favorites** sub-feed stays scrollable and Reels are untouched. Implemented on the `dev` branch (`WhitelistAccessibilityService.applyBlockHomeFeed`) but currently **non-functional** — another contributor is completing it. (Note: the original "Whitelist Feed" idea — filtering the feed to whitelisted accounts — was deemed infeasible via the AccessibilityService API and was replaced by this approach.)
 
 ## How It Works
 
 Whitelister uses Android's **AccessibilityService API** to intercept Instagram's UI events and modify behavior at runtime. No root required.
 
 - **Foreground UI** — Settings screen where you enable the service and toggle features
-- **AccessibilityService** — Runs in the background, monitors Instagram, and blocks Reels when enabled
+- **AccessibilityService** — Runs in the background, monitors Instagram, and blocks Reels when enabled. A second feature, "Lock Home Feed", is in development on `dev` but not yet functional.
 
 ## Installation
 
@@ -25,6 +25,8 @@ Whitelister uses Android's **AccessibilityService API** to intercept Instagram's
 4. You'll be taken to Android Settings → Accessibility → Whitelister → Toggle ON
 5. Go back to Whitelister → Toggle "Remove Reels" ON
 6. Open Instagram — Reels are now blocked
+
+> **Dev builds only:** the `dev` branch also exposes a "Lock Home Feed" toggle. It is not yet functional — do not rely on it.
 
 ## Requirements
 

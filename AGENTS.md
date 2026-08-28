@@ -5,8 +5,8 @@
 Android app to reclaim control over social media. Starts with Instagram; more apps planned later. Open source, Play Store distribution (99 cents). Built function by function.
 
 **Current features (in order):**
-1. Remove reels — blocks scrolling in Instagram reels tab (you can view one reel by tapping, but cannot scroll between them)
-2. Whitelist feed — user adds @account tags to whitelist; all other accounts are hidden from the feed (IN PROGRESS)
+1. Remove reels — blocks scrolling in Instagram reels tab (you can view one reel by tapping, but cannot scroll between them). **WORKING — do not modify.**
+2. Lock Home Feed — keeps the user at the top of the For You feed (Stories only); Favorites scrollable, Reels untouched. **NOT WORKING on `dev` — to be completed by another contributor.** (Originally specced as "Whitelist feed" — filtering the feed to whitelisted accounts — which was found infeasible via AccessibilityService and superseded by this approach.)
 
 ## Architecture
 
@@ -57,7 +57,7 @@ whitelister/
 │   │   ├── AndroidManifest.xml
 │   │   ├── java/com/whitelister/app/
 │   │   │   ├── MainActivity.kt                    # Compose UI for settings
-│   │   │   ├── WhitelistAccessibilityService.kt   # Core service — reels blocking
+│   │   │   ├── WhitelistAccessibilityService.kt   # Core service — reels blocking (working) + dev-only Lock Home Feed (NOT WORKING)
 │   │   │   ├── PreferencesManager.kt              # SharedPreferences wrapper
 │   │   │   └── ui/theme/
 │   │   │       ├── Color.kt
@@ -78,9 +78,9 @@ whitelister/
 
 ## Current State
 
-- **Reels blocking: WORKING (v1.0.1 logic)** — blocks reels in BOTH the Reels tab and reels opened from the feed, without breaking the rest of Instagram or closing the app
-- **Feed filtering: IN PROGRESS** — button shown in UI but disabled. Network-level approach needed (AccessibilityService cannot reliably hide individual posts).
-- **Settings persistence** — Reels toggle and whitelist stored in SharedPreferences via `PreferencesManager`
+- **Reels blocking: WORKING (stable, `main` v1.0.x and inherited by `dev`)** — blocks reels in BOTH the Reels tab and reels opened from the feed, without breaking the rest of Instagram or closing the app. **Do not modify this logic.**
+- **Lock Home Feed: NOT WORKING (`dev`)** — implemented in `WhitelistAccessibilityService` (`applyBlockHomeFeed`, plus helpers `findStoriesTray`, `isFeedAtTop`, `findFeedScrollable`) but non-functional in practice. Another contributor is completing it (see section below).
+- **Settings persistence** — Reels toggle and Lock-Home-Feed toggle stored in SharedPreferences via `PreferencesManager` (`KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"`).
 - **Live UI status** — MainActivity re-checks accessibility service status on `ON_RESUME` so returning from Settings shows "Service Active" immediately
 
 ## How Reels Blocking Works
@@ -94,6 +94,34 @@ The service listens to `TYPE_WINDOW_STATE_CHANGED`, `TYPE_WINDOW_CONTENT_CHANGED
 3. Cooldown of 2.0s prevents rapid repeated back actions.
 
 This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll).
+
+## Lock Home Feed — Dev Status (NOT WORKING)
+
+**Goal:** lock the For You feed so the user stays at the top (Stories only). Favorites sub-feed must remain scrollable; Reels untouched.
+
+**Current location:** `WhitelistAccessibilityService.applyBlockHomeFeed()` is invoked from `TYPE_VIEW_SCROLLED`. It is gated by `isInReelsViewer`, the Home button's `isSelected`/`isChecked` state, `isOnFavorites()`, and an at-top guard (`isFeedAtTop()`). The bounce itself presses the bottom-nav **Home** button.
+
+**Attempts made on `dev` (dev6 → dev15), all non-functional in practice:**
+- Skip Reels in Feed (removed).
+- Disable Autoplay / Limit Infinite Scroll (removed — not feasible via AccessibilityService).
+- Auto-Open Favorites (removed).
+- **Home-button bounce** — works as a bounce but tapping Home re-selects the tab and triggers Instagram pull-to-refresh → **infinite reload loop**.
+- `ACTION_SCROLL_BACKWARD` on the feed scrollable — Instagram ignores it (fell back to Home tap → loop).
+- `event.scrollY` gate — Instagram does **not** populate `scrollY` for feed scrolls, so the condition was never true → feature did nothing.
+- **Current (dev15):** tap Home only when `isFeedAtTop()` is false, where "at top" is detected via the **Stories tray** visibility (`findStoriesTray()`, a wide horizontal scrollable near the top). Still not working — either the tray proxy is wrong (always thinks at top → never bounces) or the guard is too aggressive.
+
+**Hard constraints (learned the hard way):**
+- Instagram does **not** populate `AccessibilityEvent.scrollY` for feed scrolls.
+- Tapping the Home tab re-selects it → pull-to-refresh → loop if you tap while already at top.
+- An AccessibilityService cannot delete/modify IG views, only perform click/scroll/back actions or `GLOBAL_ACTION_BACK`.
+- Overlay approach was rejected by the product owner.
+
+**How to debug:** `adb logcat -s WhitelistService` and watch for:
+- `LockHome: pressed Home -> bounce to top (reload accepted)` — bounce fired (good).
+- `LockHome: at top (Stories tray visible) -> skip, avoid reload loop` — at-top guard tripped (if it fires when you *are* scrolled down, the tray detection is wrong).
+- `LockHome: on Favorites, skip` / `in Reels viewer, skip` / `not on Home tab, skip` — other guards.
+
+**Handoff:** another contributor should rework `applyBlockHomeFeed()` (and its helpers) so the bounce fires on genuine downward scroll and never loops. Do **not** touch the Reels-blocking code.
 
 ## Conventions
 
@@ -110,3 +138,4 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
 - New features start at `1.1.0` on `dev`.
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
+- **Current `dev` state:** `v1.1.0-dev15` (versionCode 24). Feature 1 (Remove Reels) works; the Lock Home Feed feature is non-functional and is being handed off to another contributor (see "Lock Home Feed — Dev Status" above). Keep `dev`'s `versionCode` above `main`'s when continuing work there.
