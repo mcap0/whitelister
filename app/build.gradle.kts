@@ -21,10 +21,10 @@ android {
         applicationId = "com.whitelister.app"
         minSdk = 30
         targetSdk = 35
-        versionCode = 31
-        versionName = "1.1.1"
+versionCode = 32
+        versionName = "1.1.2"
         // dev is aligned with main (no new features ahead). Bump dev above main
-        // (e.g. 1.2.0-dev1 / versionCode 32) when feature work starts again.
+        // (e.g. 1.2.0-dev1 / versionCode 33) when feature work starts again.
     }
 
     signingConfigs {
