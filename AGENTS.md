@@ -138,4 +138,66 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
 - New features start at `1.1.0` on `dev`.
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
-- **Current `dev` state:** `v1.1.0-dev15` (versionCode 24). Feature 1 (Remove Reels) works; the Lock Home Feed feature is non-functional and is being handed off to another contributor (see "Lock Home Feed — Dev Status" above). Keep `dev`'s `versionCode` above `main`'s when continuing work there.
+- **Current `dev` state:** `v1.1.0-dev16` (versionCode 25). Feature 1 (Remove Reels) works; the Lock Home Feed feature is non-functional and is being handed off to another contributor (see "Lock Home Feed — Dev Status" above). Keep `dev`'s `versionCode` above `main`'s when continuing work there.
+
+## Publishing a Dev Build (release + APK)
+
+This is the exact procedure used to ship a `dev` pre-release APK to GitHub Releases. Any contributor/AI can repeat it. **Do not push a new build unless the user asked.**
+
+### Prerequisites
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export ANDROID_HOME=/opt/android-sdk
+```
+- Must be on the `dev` branch.
+- The GitHub PAT is a SECRET. It is **never** written into any file or committed. Pass it at runtime:
+  ```bash
+  export GITHUB_PAT=github_pat_xxx   # supplied by the user each run; do NOT hardcode
+  ```
+  If `GITHUB_PAT` is unset, abort and ask the user for it. (Repo is public → a leaked token is auto-revoked.)
+
+### Steps
+1. **Bump version** in `app/build.gradle.kts`: `versionCode` must stay **higher than `main`**; `versionName` → `1.1.0-devN` (increment N).
+2. **Build (use `clean`!):** the incremental build can falsely report `UP-TO-DATE` and ship stale code:
+   ```bash
+   ./gradlew clean assembleDebug
+   ```
+   APK: `app/build/outputs/apk/debug/app-debug.apk`
+3. **Commit + push** the version bump (and any feature code):
+   ```bash
+   git add -A && git commit -m "devN: <what changed>" && git push origin dev
+   ```
+4. **Cut the pre-release** via GitHub API (read tag/asset name from `versionName`):
+   ```bash
+   TAG="v1.1.0-devN"   # matches versionName
+   cat > /tmp/release_body.json <<'EOF'
+   {
+     "tag_name": "$TAG",
+     "target_commitish": "dev",
+     "name": "Whitelister $TAG",
+     "body": "## EXPERIMENTAL pre-release (dev)\n\n<what changed>\n\n### Unchanged\nReels blocking (feature 1) works and is untouched.",
+     "draft": false,
+     "prerelease": true
+   }
+   EOF
+   RID=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+     -H "Content-Type: application/json" \
+     -d @/tmp/release_body.json \
+     https://api.github.com/repos/OWNER/whitelister/releases | grep -m1 '"id"' | grep -oE '[0-9]+')
+   echo "release id: $RID"
+   ```
+5. **Upload the APK** to that release:
+   ```bash
+   curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+     -H "Content-Type: application/vnd.android.package-archive" \
+     --data-binary @app/build/outputs/apk/debug/app-debug.apk \
+     "https://uploads.github.com/repos/OWNER/whitelister/releases/$RID/assets?name=whitelister-$TAG.apk"
+   ```
+   (`OWNER` is the GitHub repo owner, e.g. `mcap0`.)
+6. Confirm the asset appears at `https://github.com/OWNER/whitelister/releases/tag/$TAG`.
+
+A reusable wrapper lives at `scripts/publish_dev.sh` (same logic, one command). Run it from the repo root:
+```bash
+GITHUB_PAT=github_pat_xxx ./scripts/publish_dev.sh
+```
+It refuses to run if not on `dev` or if `GITHUB_PAT` is unset.
