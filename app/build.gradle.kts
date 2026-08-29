@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.whitelister.app"
-    compileSdk = 35
+    compileSdk = 36
 
     val keystorePropsFile = rootProject.file("keystore.properties")
     val keystoreProperties = Properties()
@@ -19,12 +19,12 @@ android {
 
     defaultConfig {
         applicationId = "com.whitelister.app"
-        minSdk = 30
-        targetSdk = 35
-versionCode = 32
-        versionName = "1.1.2"
-        // dev is aligned with main (no new features ahead). Bump dev above main
-        // (e.g. 1.2.0-dev1 / versionCode 33) when feature work starts again.
+minSdk = 23
+        targetSdk = 36
+        versionCode = 33
+        versionName = "1.2.0-dev1"
+        // dev is ahead of main (v1.1.2/vc32). Once this build is validated and
+        // promoted, main becomes v1.2.0 and dev should be re-aligned to match.
     }
 
     signingConfigs {
