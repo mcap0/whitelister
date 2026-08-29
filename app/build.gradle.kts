@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.whitelister.app"
-    compileSdk = 35
+    compileSdk = 36
 
     val keystorePropsFile = rootProject.file("keystore.properties")
     val keystoreProperties = Properties()
@@ -19,10 +19,10 @@ android {
 
     defaultConfig {
         applicationId = "com.whitelister.app"
-        minSdk = 30
-        targetSdk = 35
-        versionCode = 32
-        versionName = "1.1.2"
+minSdk = 23
+        targetSdk = 36
+        versionCode = 33
+        versionName = "1.2.0"
     }
 
     signingConfigs {
