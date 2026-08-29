@@ -142,9 +142,9 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **`dev`** is for new features. It is never auto-merged into `main`; only an explicit merge (PR) promotes code to `main`.
 - **Dev releases** are cut as **pre-release** tags `vX.Y.Z-devN` (e.g. `v1.1.0-dev1`) on the `dev` branch, with the GitHub "pre-release" flag set. They do not affect `main`.
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
-- New features start at `1.2.0` on `dev` (`v1.1.2` is the current build on `main`).
+- New features start at `1.2.1` on `dev` (`v1.2.0` is the current build on `main`).
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
-- **Current state:** `main` is at **v1.1.2** (versionCode 32) — adds the in-app browser guard (Reels blocking and Lock Home Feed never act while the Instagram in-app browser is open). Production still needs the Play closed-test run (≥12 testers × 14 days). `dev` is **ahead of main at v1.2.0-dev1** (versionCode 33) — target Android 16 (API 36), minSdk lowered to Android 6.0 (API 23), AGP 8.9.2; it promotes to `main` as v1.2.0 after on-device validation (Play requires API 36 target to keep publishing from 31 Aug 2026).
+- **Current state:** `main` is at **v1.2.0** (versionCode 33) — target Android 16 (API 36), minSdk Android 6.0 (API 23), AGP 8.9.2 (Play requires API 36 target to keep publishing from 31 Aug 2026). Includes the in-app browser guard from v1.1.2. Production still needs the Play closed-test run (≥12 testers × 14 days). `dev` is **aligned with main at v1.2.0** (versionCode 33); when feature work starts on `dev` again, bump it above `main` (e.g. versionName `1.2.1-dev1`, versionCode 34).
 
 ## Publishing a Dev Build (release + APK)
 

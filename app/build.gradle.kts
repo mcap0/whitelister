@@ -22,9 +22,9 @@ android {
 minSdk = 23
         targetSdk = 36
         versionCode = 33
-        versionName = "1.2.0-dev1"
-        // dev is ahead of main (v1.1.2/vc32). Once this build is validated and
-        // promoted, main becomes v1.2.0 and dev should be re-aligned to match.
+        versionName = "1.2.0"
+        // dev is aligned with main (v1.2.0/vc33). Bump dev above main (e.g.
+        // 1.2.1-dev1 / versionCode 34) when feature work starts again.
     }
 
     signingConfigs {
