@@ -27,6 +27,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
         /** Throttle for the accessibility-tree viewer scans on content changes. */
         private const val TREE_SYNC_THROTTLE_MS = 500L
 
+        /** Throttle for the disarm check on non-clips scrolls (keeps it cheap). */
+        private const val DISARM_CHECK_THROTTLE_MS = 400L
+
         /** A node is "fullscreen" (the reel viewer is engaged) when it covers this share of the screen. */
         private const val FULLSCREEN_RATIO = 0.6f
     }
@@ -41,6 +44,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var clipsPageConfirmed = false
     private var lastBackAt = 0L
     private var lastTreeSyncAt = 0L
+    private var lastDisarmCheckAt = 0L
 
     private val dumpReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -125,13 +129,23 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
 
         if (!clipsActive) {
-            // Viewer not armed by the tree yet (e.g. first scroll raced the sync).
-            // Establish the baseline before it can be compared against.
-            clipsActive = true
-            clipsPage = cur
-            clipsPageConfirmed = false
-            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer open at page $cur")
-            return
+            // A stray non-clips scroll (feed/direct/grid inner scrollables) or a raced
+            // tree sync can leave the blocker un-armed while the viewer is open. Re-arm
+            // from the tree before deciding what to do with this scroll: never blanket-
+            // absorb, or a fast first swipe gets a free pass.
+            syncViewerFromTree("resume")
+            if (clipsActive) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: re-armed via tree (page=$clipsPage)")
+                // Fall through to the normal baseline logic below.
+            } else {
+                // The tree scan could not confirm the viewer (root null / transient
+                // window). Absorb this event as the baseline rather than guessing.
+                clipsActive = true
+                clipsPage = cur
+                clipsPageConfirmed = false
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer open at page $cur")
+                return
+            }
         }
 
         if (clipsPage == -1) {
@@ -187,10 +201,25 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun onNonClipsScroll(rid: String?) {
-        if (clipsActive) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer closed (feed scroll source=$rid)")
-            resetClipsSession("feed scroll")
+        if (!clipsActive) return
+        // Do not disarm while the full-screen reel viewer is still present: inner
+        // scrollables (comment sheet, DM lists, generic recycler_views inside the
+        // viewer) fire scroll events while it is open, and a false disarm lets the
+        // next reel swipe be absorbed as a fresh baseline -- the sporadic free
+        // scroll across feed/direct/profile reels.
+        val now = System.currentTimeMillis()
+        if (now - lastDisarmCheckAt < DISARM_CHECK_THROTTLE_MS) return
+        lastDisarmCheckAt = now
+        val root = getRootInActiveWindow()
+        if (root != null) {
+            try {
+                if (isFullscreenClipsPager(root, 0)) return
+            } finally {
+                root.recycle()
+            }
         }
+        if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer closed (feed scroll source=$rid)")
+        resetClipsSession("feed scroll")
     }
 
     private fun resetClipsSession(reason: String) {
@@ -215,10 +244,13 @@ class WhitelistAccessibilityService : AccessibilityService() {
      * the free-pass window. The armed state is only ended by a non-clips feed scroll
      * (onNonClipsScroll) or by the BACK issued after a blocked swipe.
      *
-     * When the reel TAB is selected the pager's page is continuous (it keeps its position),
-     * so clipsPage is retained. When the viewer opens from the feed or a grid, the pager was
-     * repositioned and the baseline is reset to -1 (re-established from the settle on the
-     * next clips scroll).
+     * clipsPage is only reset to -1 (baseline unknown) when the viewer is NEWLY armed from a
+     * disarmed state and the Reels tab is not selected (a feed/grid/DM open, where the pager
+     * reports the tapped reel's position). When the blocker is ALREADY armed, the baseline is
+     * kept: repeated content-change syncs while the viewer is open must not wipe it, or a real
+     * swipe can land on clipsPage == -1 and be absorbed as a "settle" -- the sporadic free
+     * scroll across feed/direct/profile reels. When the Reels tab is selected the page is also
+     * retained (continuity across tab reopenings).
      */
     private fun syncViewerFromTree(reason: String) {
         val root = getRootInActiveWindow() ?: return
@@ -228,7 +260,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (pagerFullscreen) {
                 val wasEnabled = clipsActive
                 clipsActive = true
-                if (!reelTabSelected) {
+                if (!wasEnabled && !reelTabSelected) {
                     clipsPage = -1
                     clipsPageConfirmed = false
                 }
