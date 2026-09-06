@@ -30,6 +30,22 @@ class WhitelistAccessibilityService : AccessibilityService() {
         /** Throttle for the disarm check on non-clips scrolls (keeps it cheap). */
         private const val DISARM_CHECK_THROTTLE_MS = 400L
 
+        /**
+         * After the reel viewer is first detected, IG's opening emit (the programmatic
+         * reposition to the tapped reel, often reported as from != to) must not be read as a
+         * user swipe, or the reel closes on open. Events landing inside this window while no
+         * baseline is known are absorbed as the opening baseline instead of blocked.
+         */
+        private const val OPEN_SETTLE_MS = 400L
+
+        /**
+         * An opening baseline can be followed within a few dozen ms by MORE reposition events
+         * (IG snaps the shared pager to the tapped reel as e.g. 10 then 10->11). Those must
+         * merge into the baseline, not block the reel. Real user swipes settle later than this
+         * (human reaction time), so this window does not grant a free pass.
+         */
+        private const val OPEN_REPOSITION_MS = 100L
+
         /** A node is "fullscreen" (the reel viewer is engaged) when it covers this share of the screen. */
         private const val FULLSCREEN_RATIO = 0.6f
     }
@@ -45,6 +61,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private var lastBackAt = 0L
     private var lastTreeSyncAt = 0L
     private var lastDisarmCheckAt = 0L
+    // When the blocker was last armed (disarmed -> armed). Gates the OPEN_SETTLE_MS absorb;
+    // NOT refreshed on re-confirmations, or a long-rendering open would keep the window open.
+    private var armedAt = 0L
 
     private val dumpReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -85,8 +104,20 @@ class WhitelistAccessibilityService : AccessibilityService() {
                     Log.d(TAG, "WINDOW_STATE className=${event.className}")
                     dumpTree("WINDOW_STATE")
                 }
-                resetClipsSession("app window change")
-                syncViewerFromTree("window")
+                // A window change while the clips viewer is still present MUST NOT wipe the
+                // session: chat-reel opens swap the transparent modal's window MID-viewer
+                // (e.g. TransparentModalActivity -> android.view.View) with the pager still
+                // in the tree, and the reset re-arms with clipsPage = -1 right before the
+                // user's flick, so the advance lands on clipsPage == -1 and is absorbed as a
+                // fresh "settle" -- the chat surface's free first swipe. Reset only when the
+                // viewer is genuinely gone from the tree.
+                if (isClipsViewerOpen()) {
+                    syncViewerFromTree("window")
+                    if (BuildConfig.DEBUG) Log.d(TAG, "blocker: window change, clips viewer still open, session kept")
+                } else {
+                    resetClipsSession("app window change")
+                    syncViewerFromTree("window")
+                }
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 val now = System.currentTimeMillis()
@@ -114,70 +145,89 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun onClipsPagerScroll(event: AccessibilityEvent) {
-        // IG reports the pager's current reel index here and fromIndex/toIndex can be
-        // either the page being left or the page just entered (reporting is unreliable
-        // across flings). Use the larger of the two so a completed reel transition is
-        // always detected against clipsPage, while a pure settle (fromIndex==toIndex)
-        // still passes. This closes the "one free scroll" in the Reels tab without
-        // weakening the feed-open path (it can only block more, never less).
-        val cur = maxOf(event.fromIndex, event.toIndex)
+        // Anchor on toIndex: it is the page the pager RESTED at after this motion, while
+        // fromIndex is the page left behind. maxOf(from,to) makes a revert swipe (2->1) look
+        // like the current page and grants a free pass. Settles (from==to) are unaffected.
+        // Guard toIndex == -1 (some IG events carry no index) with a maxOf fallback.
+        val cur = if (event.toIndex >= 0) event.toIndex else maxOf(event.fromIndex, event.toIndex)
         val now = System.currentTimeMillis()
-
-        if (now - lastBackAt < BACK_COOLDOWN_MS) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: cooldown after BACK, ignoring clips scroll")
-            return
-        }
 
         if (!clipsActive) {
             // A stray non-clips scroll (feed/direct/grid inner scrollables) or a raced
             // tree sync can leave the blocker un-armed while the viewer is open. Re-arm
-            // from the tree before deciding what to do with this scroll: never blanket-
-            // absorb, or a fast first swipe gets a free pass.
+            // from the tree before deciding: never blanket-absorb, or a fast first swipe
+            // gets a free pass.
             syncViewerFromTree("resume")
             if (clipsActive) {
+                // A resume is a freshly-armed session whose opening emit may have been
+                // missed; do not let THIS event hide inside the open-settle window.
+                armedAt = 0
                 if (BuildConfig.DEBUG) Log.d(TAG, "blocker: re-armed via tree (page=$clipsPage)")
-                // Fall through to the normal baseline logic below.
+                // Fall through to the baseline logic below.
             } else {
                 // The tree scan could not confirm the viewer (root null / transient
                 // window). Absorb this event as the baseline rather than guessing.
+                if (cur < 0) return
                 clipsActive = true
                 clipsPage = cur
-                clipsPageConfirmed = false
+                clipsPageConfirmed = event.fromIndex == event.toIndex
                 if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer open at page $cur")
                 return
             }
+        } else if (now - lastBackAt < BACK_COOLDOWN_MS) {
+            // A BACK was just issued. Only keep ignoring scrolls while the viewer is actually
+            // gone: a BACK that got eaten (sheet collapse / transition race) leaves the pager
+            // open, and the user's next swipes must still be blocked. A real page charge on a
+            // still-open viewer below falls through and blocks again.
+            if (!isClipsViewerOpen()) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: cooldown after BACK, viewer gone, ignoring scroll")
+                return
+            }
+            if (clipsPage >= 0 && cur == clipsPage) return
         }
 
         if (clipsPage == -1) {
-            // Viewer visible but baseline unknown: reel-tab on a cold start, or the
-            // pager was repositioned by a feed-open.
+            // Baseline unknown. When the pager was just armed (cold tab start, or feed/grid/DM
+            // open), IG plays a programmatic reposition to the tapped reel as SEVERAL page-
+            // advancing events (e.g. 10 then 10->11); the last one is where the pager rests.
+            // Inside the OPEN_SETTLE_MS window every one of those is part of the open -- absorb
+            // them all as the baseline. Blocking one is the "reel closes on open" false
+            // positive. After the window, a from != to event with no baseline is a genuine
+            // first swipe on a silently-rendered viewer and must be blocked outright.
+            if (cur >= 0 && now - armedAt <= OPEN_SETTLE_MS) {
+                val prev = clipsPage
+                clipsPage = cur
+                clipsPageConfirmed = event.fromIndex == event.toIndex
+                if (BuildConfig.DEBUG && prev != cur) {
+                    Log.d(TAG, "blocker: opening baseline (settle window) at page $cur")
+                }
+                return
+            }
+            if (cur < 0) return
             if (event.fromIndex == event.toIndex) {
-                // Settle/positioning event at the reel currently shown: absorb it as
-                // the baseline so a genuine page change (a swipe) is what triggers the
-                // BACK below, not the viewer open itself.
+                // Late settle, still no baseline: nothing to compare against. Absorb it -- the
+                // no-wipe rule holds, so this cannot reopen the periodic free-pass.
                 clipsPage = cur
                 clipsPageConfirmed = true
-                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer baseline at page $cur")
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: late baseline at page $cur")
+                return
+            }
+            if (cur < 0) return
+            if (PreferencesManager.isReelsBlockingEnabled(this)) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE (no baseline) ${event.fromIndex}->$cur, issuing BACK")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                lastBackAt = now
+                clipsActive = false
+                clipsPage = cur
+                clipsPageConfirmed = false
             } else {
-                // A genuine swipe arrived before any settle (ultra-fast cold-start
-                // flick, no settle emitted). Block it outright: there is no baseline
-                // to protect, so this is the user scrolling.
-                if (PreferencesManager.isReelsBlockingEnabled(this)) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE (no baseline) ${event.fromIndex}->$cur, issuing BACK")
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                    lastBackAt = now
-                    clipsActive = false
-                    clipsPage = cur
-                    clipsPageConfirmed = false
-                } else {
-                    clipsPage = cur
-                    clipsPageConfirmed = false
-                }
+                clipsPage = cur
+                clipsPageConfirmed = false
             }
             return
         }
 
-        if (cur == clipsPage) {
+        if (clipsPage >= 0 && cur == clipsPage) {
             if (!clipsPageConfirmed) {
                 clipsPageConfirmed = true
                 if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer settled at page $cur")
@@ -185,18 +235,45 @@ class WhitelistAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Page changed. No open-anim absorb: the feed can auto-advance a reel before
-        // we tap it, so the "open settle" would grant a free pass. Every page move is
-        // treated as a swipe to block.
+        // Page changed away from the baseline. Inside the first ~100ms after arming, a page
+        // move with an existing baseline is still the opening reposition: IG snaps the shared
+        // pager to the tapped reel as several events (e.g. 10 then 10->11) within a few dozen
+        // ms. Absorb it as a baseline merge -- blocking it is the "reel closes on open" false
+        // positive. Real user swipes land later than this (human reaction), so they block.
+        if (now - armedAt <= OPEN_REPOSITION_MS) {
+            clipsPage = cur
+            clipsPageConfirmed = false
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: opening reposition merged to page $cur")
+            return
+        }
+
+        // Any deviation from the baseline is a genuine swipe. Record the pager's surviving
+        // position so the next open is armed with a matching baseline -- without this, the
+        // Reel-tab reopens with clipsPage one page behind and instant-BACKs on restore.
         if (PreferencesManager.isReelsBlockingEnabled(this)) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE ${clipsPage}->$cur, issuing BACK")
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE $clipsPage->$cur, issuing BACK")
             performGlobalAction(GLOBAL_ACTION_BACK)
             lastBackAt = now
             clipsActive = false
-        } else {
-            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE ${clipsPage}->$cur (blocking disabled)")
             clipsPage = cur
             clipsPageConfirmed = false
+        } else {
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE $clipsPage->$cur (blocking disabled)")
+            clipsPage = cur
+            clipsPageConfirmed = false
+        }
+    }
+
+    /** True when the full-screen reel viewer is still in the accessibility tree (throttled scan). */
+    private fun isClipsViewerOpen(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastDisarmCheckAt < DISARM_CHECK_THROTTLE_MS) return true
+        lastDisarmCheckAt = now
+        val root = getRootInActiveWindow() ?: return true
+        try {
+            return isFullscreenClipsPager(root, 0)
+        } finally {
+            root.recycle()
         }
     }
 
@@ -207,17 +284,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         // viewer) fire scroll events while it is open, and a false disarm lets the
         // next reel swipe be absorbed as a fresh baseline -- the sporadic free
         // scroll across feed/direct/profile reels.
-        val now = System.currentTimeMillis()
-        if (now - lastDisarmCheckAt < DISARM_CHECK_THROTTLE_MS) return
-        lastDisarmCheckAt = now
-        val root = getRootInActiveWindow()
-        if (root != null) {
-            try {
-                if (isFullscreenClipsPager(root, 0)) return
-            } finally {
-                root.recycle()
-            }
-        }
+        if (isClipsViewerOpen()) return
         if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer closed (feed scroll source=$rid)")
         resetClipsSession("feed scroll")
     }
@@ -260,9 +327,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (pagerFullscreen) {
                 val wasEnabled = clipsActive
                 clipsActive = true
-                if (!wasEnabled && !reelTabSelected) {
-                    clipsPage = -1
-                    clipsPageConfirmed = false
+                if (!wasEnabled) {
+                    armedAt = System.currentTimeMillis()
+                    if (!reelTabSelected) {
+                        clipsPage = -1
+                        clipsPageConfirmed = false
+                    }
                 }
                 if (BuildConfig.DEBUG && (!wasEnabled || clipsPage == -1)) {
                     Log.d(TAG, "blocker: viewer armed via tree ($reason) tab=$reelTabSelected page=$clipsPage")
