@@ -7,6 +7,7 @@ Android app to reclaim control over social media. Starts with Instagram; more ap
 **Current features (in order):**
 1. Remove reels — blocks scrolling in Instagram reels tab (you can view one reel by tapping, but cannot scroll between them). **WORKING — do not modify.**
 2. Lock Home Feed — keeps the user at the top of the For You feed (Stories only); Favorites scrollable, Reels untouched. **WORKING (stable, v1.1.1).** (Originally specced as "Whitelist feed" — filtering the feed to whitelisted accounts — which was found infeasible via AccessibilityService and superseded by this approach.)
+3. Block Feed — when active, the Home feed cannot be scrolled: any scroll-down is counteracted by pressing the bottom-nav Home tab, which snaps the feed back to the top instantly (accepts pull-to-refresh). **WORKING (dev, uncommitted when this line was written).**
 
 ## Architecture
 
@@ -88,8 +89,9 @@ whitelister/
     5. **Window-change-gated reset (F4, chat reels).** `TYPE_WINDOW_STATE_CHANGED` no longer blindly resets the session. IG swaps the transparent modal's window MID-viewer on chat-reel opens (`TransparentModalActivity` then `android.view.View`) while the pager is still fullscreen; the old reset re-armed with `clipsPage == -1` right before the user's flick, so the first advance was absorbed as a fresh settle — the chat surface's free first swipe. Fix: the handler checks `isClipsViewerOpen()`; if the pager is still in the tree the armed session (and baseline) is kept (`window change, clips viewer still open, session kept`), and the reset only runs when the viewer is genuinely gone.
     Validation (device): Reel tab shows continuity (`armed page=1` on reopen, `opening reposition merged to page 2`, then `SWIPE 2->3 BACK`); profile grid (thugtai) 11/11 first-flick blocks with no instant-close; feed reels-bar flicks blocked (`SWIPE 12->13`, `15->16`, `17->18` each BACK) and a revert `16->14` blocked via F0; chat-reel rapid up+down cycles block the first flick (`window change ... session kept` → `SWIPE 0->1 BACK`); idle opens never trigger a false BACK.
 - **Lock Home Feed: WORKING (v1.1.1)** — implemented in `WhitelistAccessibilityService` (`applyBlockHomeFeed`, plus helpers `findStoriesTray`, `isFeedAtTop`, `isOtherNavTabSelected`). See section below for how it works.
+- **Block Feed: WORKING (dev, uncommitted)** — implemented in `WhitelistAccessibilityService` (`blockFeedOnScroll`, `evaluateBlockFeedOnOpen`, `pressHome`, `findFeedTab`, `findStoriesTray`, `isOnHomeTabGivenSelection`, `findSelectedBottomTab`, `isHomeFeedRendered`). See its section below for how it works.
 - **Production build config** — `main`: `versionCode 31`, `versionName 1.1.1`. Release uses R8 minify + resource shrink (`isMinifyEnabled = true`, `proguard-rules.pro`, keep rules for the service/activity already present). All `Log.*` calls in the service are gated behind `BuildConfig.DEBUG` (`buildConfig = true`) so a release build logs nothing — keep new log statements gated the same way.
-- **Settings persistence** — Reels toggle and Lock-Home-Feed toggle stored in SharedPreferences via `PreferencesManager` (`KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"`).
+- **Settings persistence** — Reels toggle, Lock-Home-Feed toggle, and Block-Feed toggle stored in SharedPreferences via `PreferencesManager` (`KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"`, `KEY_BLOCK_FEED = "block_feed_enabled"`).
 - **Live UI status** — MainActivity re-checks accessibility service status on `ON_RESUME` so returning from Settings shows "Service Active" immediately
 
 ## How Reels Blocking Works (v1.2.0+, `dev`)
@@ -104,6 +106,43 @@ The service listens to `TYPE_WINDOW_STATE_CHANGED`, `TYPE_WINDOW_CONTENT_CHANGED
 5. **Cooldown of 2.0s** prevents rapid repeated back actions and the BACK-triggered event storm. The cooldown branch does NOT silently drop events — it runs `isClipsViewerOpen()` (throttled 400ms tree scan, failing open when the root is transient) so a swallowed BACK re-arms and blocks again instead of blinding the blocker until the cooldown expires.
 
 This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll), combined with the tree arming + page-continuity + settle-absorb design that fixed the Reels-tab "always scrolls once" bug (dev ~v1.2.x).
+
+## Block Feed — How It Works (Working, dev)
+
+**Goal:** when active, the Home feed cannot be scrolled down from the top. Any scroll-down is counteracted by pressing the **bottom-nav Home tab**, which snaps the feed back to the top instantly. The re-tap re-selects Home (✔) and **does trigger pull-to-refresh** — the reload is accepted by the product rule in exchange for the instant snap-back (a `dispatchGesture` scroll-up swipe was tried first but felt too slow and was removed; the scroll-up no longer needed `canPerformGestures`, so that flag was removed from `accessibility_service_config.xml` too). **Do not use `ACTION_SCROLL_TO_TOP`** (IG ignores it).
+
+**Where it lives:** `WhitelistAccessibilityService.blockFeedOnScroll()` is invoked from `onNonClipsScroll()` (non-clips `TYPE_VIEW_SCROLLED`), plus an on-open evaluation `evaluateBlockFeedOnOpen()` from `TYPE_WINDOW_STATE_CHANGED`. Gates: throttle → the full-screen clips check (`isClipsViewerOpen()` — never fight a reel swipe with a Home press) → Home-tab isolation (`isOnHomeTabGivenSelection`) → feed-rendered gate (`isHomeFeedRendered`) → at-top guard (`findStoriesTray`).
+
+**Mechanism:**
+- `blockFeedOnScroll()`: throttled to `BLOCK_FEED_THROTTLE_MS = 500`, verifies no full-screen reel pager is open, verifies the user is on the Home tab, and then — if the Stories tray is NOT currently expanded (feed scrolled down) — posts `pressHomeRunnable` to the main `Handler` (`BLOCK_FEED_PRESS_DELAY_MS = 150`, debounced: rapid scroll events reschedule it, so one press fires per scroll burst).
+- `pressHome()`: finds the `com.instagram.android:id/feed_tab` node (`findFeedTab`) and `performAction(ACTION_CLICK)` — the same node the user taps by hand, so IG snaps to top natively.
+- At-top detection reuses the **Stories tray**: unlike the Lock-Home-Feed era, the tray is NOT removed when scrolled — it **collapses into a thin sticky strip**. So `findStoriesTray()` requires `top > -400 && top < 600`, `width > 50%` screen, AND `trayHeight / screenHeight >= BLOCK_FEED_TRAY_MIN_HEIGHT_RATIO` (0.10). Diagnostics: expanded tray at top ≈ 345px (~14% of 2424px screen); collapsed strip ≈ 134px (~5.5%). When the tray is expanded → `at top`, return early (no press) — this is the loop guard that stops re-tapping Home while already at top.
+
+**Refresh-loop guard (the key constraint):** pressing Home re-selects the already-selected Home tab → pull-to-refresh, during which the tray collapses and IG emits scroll events. A naive rule would re-press on every one of those events → infinite refresh loop. Following the Lock-Home-Feed `sawTopSinceBounce` pattern: the at-top branch sets `sawTopSinceBlockPress = true`; each press sets it `false`; a press is refused while `!sawTopSinceBlockPress` UNLESS `BLOCK_FEED_BOUNCE_SETTLE_MS = 2000` elapsed (the hard bypass catch, in case the tray never re-appears). So: one press → feed at top → refresh spins with tray hidden → tray re-expands (re-armed) → the next genuine user scroll-down can press once more.
+
+**Home-tab isolation:** `isOnHomeTabGivenSelection(root)` returns true if the `feed_tab` is `selected`, OR if **no** bottom-nav tab is selected (IG cold start — treat as Home). `findSelectedBottomTab` scans only the bottom band (y > 72% of screen) for any other `_tab` that is selected → not Home. This makes Block Feed skip on Profile/Reels/Search/Direct, and its Home press never hijacks those surfaces. Verified: scrolling on Profile logs `BlockFeed: not on Home tab, skip` with zero interference.
+
+**Cold-start hotfix (the "doesn't work when opening the app" bug):** on a fresh IG start (process killed or app reopened) NO bottom tab is reported `selected` during — and often after — the initial render, so the old "must be selected" gate treated every cold-start scroll as "not on Home tab" and Block Feed never engaged until the user tapped a tab. Two fixes:
+- **The assume-Home fallback was dead code.** `isOnHomeTabGivenSelection` did `val other = findSelectedBottomTab(root); return other == null` — but `findSelectedBottomTab` returned non-nullable `Boolean`, so `other == null` was ALWAYS false and the fallback NEVER returned true. It now returns `Boolean?` (null = no other tab selected) and, per the doc's original intent, only counts `_tab` nodes inside the bottom band (y ≥ 72%) — a transiently-selected mid-tree `_tab` (stories sub-tabs, sheets, carousels) can no longer clear the cold-start assume-Home either. Verified: cold start → first scroll now `pressed Home` immediately.
+- **Feed-rendered gate.** Assumed-Home must also prove the actual feed is on screen: `blockFeedOnScroll` and the open-eval both require `isHomeFeedRendered(root)` (the `android:id/list` / `swipeable_nav_view_pager_inner_recycler_view` feed list `isVisibleToUser` AND `feed_tab` present). Otherwise a cold-opened-but-restored Profile/Reels (also no tab selected during its fade-in) would read as "assume Home" and get hijacked to the feed. Verified: Profile still `not on Home tab, skip`.
+
+**On-open evaluation (`evaluateBlockFeedOnOpen`):** `TYPE_WINDOW_STATE_CHANGED` with class name `com.instagram.mainactivity.InstagramMainActivity` (or IG's generic `android.widget.FrameLayout` content root) schedules the eval after `BLOCK_FEED_OPEN_SETTLE_MS = 700` (retry at +1200ms if the feed is still rendering, `openEvalAttempts`). It re-arms `sawTopSinceBlockPress = true` for the fresh session, and if the feed rendered scrolled-down (tray collapse restored from the last session) presses Home once to snap back — a scroll event never fires for a *restored* scroll position, so the scroll path alone would leave it mid-feed. At top → `opened at top, skip` (NO reload on a clean open). Bounded by `BLOCK_FEED_OPEN_MIN_INTERVAL_MS = 2500` so a Home↔surface↔Home cycle can't double-press.
+
+**Constraints discovered empirically:**
+- The Home-tab press triggers pull-to-refresh (reload). The 150ms press delay + near-instant snap feels immediate; the 500ms throttle caps re-presses.
+- The at-top tray guard must be strict (height ratio ≥ 10%) — a sloppier check would treat the collapsed strip as "at top", and (worse) the refresh-spinner state as "at top", breaking the loop guard.
+- Re-press during the reload is suppressed by the `sawTopSinceBlockPress` re-arm gate (see above).
+
+**How to debug:** `adb logcat -s WhitelistService` (debug builds only; release logs nothing) and watch for:
+- `BlockFeed: pressed Home -> snap to top (reload accepted) clicked=true` — a scroll-down was counteracted.
+- `BlockFeed: at top (Stories tray visible), re-armed` — feed re-settled at top; the guard re-arms so the next scroll can press again.
+- `BlockFeed: refresh-settle guard, skip` — a press was suppressed while the pull-to-refresh was still settling (loop guard working).
+- `BlockFeed: not on Home tab, skip` — isolation working (Profile/Reels/Search/Direct).
+- `BlockFeed: home assumed but feed not rendered, skip` — cold-start/restored-surface safety gate.
+- `BlockFeed: opened at top, skip` — app opened clean, NO reload fired.
+- `BlockFeed: opened mid-feed -> snap to top` — app opened with a restored scroll, snapped once.
+- `BlockFeed: clips viewer open, skip` — reel surface guard.
+- `BlockFeed: Home button not found` — `feed_tab` node missing from the tree.
 
 ## Lock Home Feed — How It Works (Working, v1.1.1)
 

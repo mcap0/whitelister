@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -48,6 +50,54 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         /** A node is "fullscreen" (the reel viewer is engaged) when it covers this share of the screen. */
         private const val FULLSCREEN_RATIO = 0.6f
+
+        /** Throttle for Block Feed's press-Home bounce (keeps it cheap, avoids re-press storms). */
+        private const val BLOCK_FEED_THROTTLE_MS = 500L
+
+        /** The Stories tray sits at the very top of the home feed. When visible, we are at top. */
+        private const val BLOCK_FEED_TRAY_TOP = -400
+        private const val BLOCK_FEED_TRAY_BOTTOM = 600
+        private const val BLOCK_FEED_TRAY_WIDTH_RATIO = 0.5f
+
+        /**
+         * Max height (px) a node may be and still be considered the Stories tray. The tray is a
+         * short row (~1-2 hundred px tall) nested inside the feed list; the feed list itself
+         * spans the full screen (0, 152 - 0, 2235) and would otherwise false-match the at-top
+         * test. 600 is well above the tray's real height yet far below any full-screen feed.
+         */
+        private const val BLOCK_FEED_TRAY_MAX_HEIGHT = 600f
+
+        /**
+         * When the feed scrolls down, the Stories tray COLLAPSES into a thin sticky strip rather
+         * than being removed. Expanded at top it is ~14% of the screen height; collapsed it is
+         * ~5.5%. Requiring at least 10% of the screen keeps the collapsed strip from reading as
+         * "at top", so Block Feed still fires while the mini-strip shows.
+         */
+        private const val BLOCK_FEED_TRAY_MIN_HEIGHT_RATIO = 0.10f
+
+        /**
+         * Wait this long after a deviating feed scroll before tapping the Home tab. Short enough to
+         * feel instant, long enough that a tap is not swallowed by the user's own ongoing fling.
+         */
+        private const val BLOCK_FEED_PRESS_DELAY_MS = 150L
+
+        /**
+         * After a Home-tab press the feed snaps to top and Instagram pulls-to-refresh (the
+         * reload shows the collapsed tray, so the at-top guard can't tell it is really at top).
+         * While the refresh settles, further presses are suppressed; only once the expanded tray
+         * is seen at top again (re-arm) -- or this hard timeout expires -- can Block Feed press
+         * Home once more. This is the loop guard that stops a pull-to-refresh re-press storm.
+         */
+        private const val BLOCK_FEED_BOUNCE_SETTLE_MS = 2000L
+
+        /** Wait this long after the Home surface appears before evaluating the feed position. */
+        private const val BLOCK_FEED_OPEN_SETTLE_MS = 700L
+
+        /** Second-chance delay when the first open-eval found the feed still rendering. */
+        private const val BLOCK_FEED_OPEN_RETRY_MS = 1200L
+
+        /** Minimum gap between open-evaluation presses: one snap-back per surface appearance. */
+        private const val BLOCK_FEED_OPEN_MIN_INTERVAL_MS = 2500L
     }
 
     // --- Reels-blocking state machine (empirical, source-based) ---
@@ -64,6 +114,23 @@ class WhitelistAccessibilityService : AccessibilityService() {
     // When the blocker was last armed (disarmed -> armed). Gates the OPEN_SETTLE_MS absorb;
     // NOT refreshed on re-confirmations, or a long-rendering open would keep the window open.
     private var armedAt = 0L
+
+    // --- Block Feed state machine ---
+    // Last time Block Feed issued a press-Home bounce. Throttled to avoid re-press storms while
+    // the feed settles back to the top.
+    private var lastBlockFeedAt = 0L
+    // Loop guard: after a press-Home bounce (which triggers pull-to-refresh, hiding the tray),
+    // the feed must be seen back at top (expanded tray) before Block Feed presses Home again.
+    private var sawTopSinceBlockPress = false
+    private var lastBlockFeedPressAt = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pressHomeRunnable = Runnable {
+        pressHome()
+    }
+    private val openFeedEvalRunnable = Runnable {
+        evaluateBlockFeedOnOpen()
+    }
+    private var openEvalAttempts = 0
 
     private val dumpReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -117,6 +184,19 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 } else {
                     resetClipsSession("app window change")
                     syncViewerFromTree("window")
+                }
+                // Block Feed: on the Home surface appearing (reopen / cold start) evaluate the
+                // feed position so a restored-scrolled feed snaps to top without needing a
+                // scroll event. Class-gated to the main feed window (and IG's generic content
+                // root); everything else (sheets, DM, profile) is filtered by the eval's own
+                // feed-rendered + at-top gates.
+                if (PreferencesManager.isBlockFeedEnabled(this)) {
+                    val cn = event.className?.toString()
+                    if (cn != null && (cn.contains("mainactivity") || cn == "android.widget.FrameLayout")) {
+                        openEvalAttempts = 0
+                        mainHandler.removeCallbacks(openFeedEvalRunnable)
+                        mainHandler.postDelayed(openFeedEvalRunnable, BLOCK_FEED_OPEN_SETTLE_MS)
+                    }
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
@@ -278,6 +358,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     private fun onNonClipsScroll(rid: String?) {
+        // Block Feed: any non-clips scroll while the home feed can be engaged should send us
+        // back to the top. This runs even if reels blocking's clips session is not active.
+        if (PreferencesManager.isBlockFeedEnabled(this)) {
+            blockFeedOnScroll()
+        }
         if (!clipsActive) return
         // Do not disarm while the full-screen reel viewer is still present: inner
         // scrollables (comment sheet, DM lists, generic recycler_views inside the
@@ -287,6 +372,260 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (isClipsViewerOpen()) return
         if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer closed (feed scroll source=$rid)")
         resetClipsSession("feed scroll")
+    }
+
+    /**
+     * Block Feed: when the user scrolls the Home feed away from the top, press the bottom-nav
+     * Home tab so the feed snaps back to the top. A re-tap of the already-selected Home tab
+     * triggers a pull-to-refresh (reload) -- the product rule accepts the reload in exchange
+     * for the instant snap-back (much faster than the dispatchGesture scroll-up that replaced).
+     *
+     * The at-top test is the Stories tray: expanded (>10% screen height) it exists only at the
+     * very top of the feed. While the tray is NOT expanded we are scrolled down and may press.
+     * During the reload the tray is hidden, so a re-arm gate (sawTopSinceBlockPress) prevents
+     * re-pressing until the feed is genuinely seen back at top -- that stops the refresh loop.
+     */
+    private fun blockFeedOnScroll() {
+        val now = System.currentTimeMillis()
+        if (now - lastBlockFeedAt < BLOCK_FEED_THROTTLE_MS) return
+        // Never hijack scrolls inside the full-screen reel viewer (comments sheet, DM list reels,
+        // etc.) -- the clips pager is already handled by reels blocking.
+        if (isClipsViewerOpen()) return
+        val root = getRootInActiveWindow() ?: return
+        try {
+            // Only engage on the Home feed tab. On Search/Reels/Shop/Profile the user must be free
+            // to scroll. Fall back to "assume Home" when no bottom tab is reported selected yet
+            // (IG's cold-start state) -- but only when the actual Home feed is on screen, so a
+            // restored-other-tab surface (no tab selected yet during its fade-in) is not hijacked.
+            if (!isOnHomeTabGivenSelection(root)) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: not on Home tab, skip")
+                return
+            }
+            if (!isHomeFeedRendered(root)) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: home assumed but feed not rendered, skip")
+                return
+            }
+            if (findStoriesTray(root, 0)) {
+                sawTopSinceBlockPress = true
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: at top (Stories tray visible), re-armed")
+                return
+            }
+        } finally {
+            root.recycle()
+        }
+        // Not at top. But if we last pressed Home, IG is still mid pull-to-refresh (tray hidden):
+        // wait for the tray to be seen at top again -- or for the hard settle timeout -- before
+        // pressing again, otherwise every scroll event during the reload re-presses → refresh loop.
+        if (!sawTopSinceBlockPress && now - lastBlockFeedPressAt < BLOCK_FEED_BOUNCE_SETTLE_MS) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: refresh-settle guard, skip")
+            return
+        }
+        lastBlockFeedAt = now
+        lastBlockFeedPressAt = now
+        sawTopSinceBlockPress = false
+        // Tap AFTER the current scroll settles: injecting mid-motion gets merged into the user's
+        // ongoing drag and swallowed. The delay lets IG reach its resting position first.
+        mainHandler.removeCallbacks(pressHomeRunnable)
+        mainHandler.postDelayed(pressHomeRunnable, BLOCK_FEED_PRESS_DELAY_MS)
+    }
+
+    /**
+     * Block Feed, on app open: if the Home feed appeared scrolled down (IG restores the previous
+     * session's scroll) snap it back to the top -- no scroll event fires for a restored position,
+     * so the scroll-driven path alone would leave it mid-feed. Also re-arms the loop-guard state
+     * for a fresh session so a stale mid-refresh flag from the last session can't suppress the
+     * first bounce. Never presses while the feed is rendered at top (no reload on a clean open).
+     */
+    private fun evaluateBlockFeedOnOpen() {
+        if (!PreferencesManager.isBlockFeedEnabled(this)) return
+        val now = System.currentTimeMillis()
+        val root = getRootInActiveWindow() ?: return
+        try {
+            // Fresh session: the feed is either seen at top (re-arms) or about to be bounced.
+            if (isOnHomeTabGivenSelection(root)) {
+                if (!isHomeFeedRendered(root)) {
+                    // Surface still mid-render (splash/transition root). Give the layout one or
+                    // two more chances to appear before giving up on this window change.
+                    if (openEvalAttempts < 2) {
+                        openEvalAttempts++
+                        mainHandler.removeCallbacks(openFeedEvalRunnable)
+                        mainHandler.postDelayed(openFeedEvalRunnable, BLOCK_FEED_OPEN_RETRY_MS)
+                    }
+                    return
+                }
+                if (findStoriesTray(root, 0)) {
+                    sawTopSinceBlockPress = true
+                    if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: opened at top, skip")
+                    return
+                }
+                // Opened scrolled-down: snap back once, respecting throttle and the min interval
+                // between open-presses (a Home <-> surface <-> Home cycle must not double-press).
+                if (now - lastBlockFeedPressAt < BLOCK_FEED_OPEN_MIN_INTERVAL_MS) return
+                if (now - lastBlockFeedAt < BLOCK_FEED_THROTTLE_MS) return
+                lastBlockFeedAt = now
+                lastBlockFeedPressAt = now
+                sawTopSinceBlockPress = false
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: opened mid-feed -> snap to top")
+                mainHandler.removeCallbacks(pressHomeRunnable)
+                mainHandler.postDelayed(pressHomeRunnable, BLOCK_FEED_PRESS_DELAY_MS)
+            }
+            // Not Home (another tab genuinely selected): leave the restored surface alone.
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /**
+     * True when the actual Home feed surface is present and rendered: the main feed list is
+     * visible AND the bottom-nav Home tab node exists (so pressHome can act). This is what stops
+     * the open-evaluation from pressing Home into a Profile/DM/comments/splash surface, which
+     * would otherwise also qualify as "no bottom tab selected" on a cold start.
+     */
+    private fun isHomeFeedRendered(node: AccessibilityNodeInfo?): Boolean {
+        if (!isFeedListVisible(node, 0)) return false
+        return findFeedTab(node, 0) != null
+    }
+
+    private fun isFeedListVisible(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        val rid = node.viewIdResourceName
+        if (rid == "android:id/list" || rid == "com.instagram.android:id/swipeable_nav_view_pager_inner_recycler_view") {
+            if (node.isVisibleToUser) return true
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = isFeedListVisible(child, depth + 1)
+            child.recycle()
+            if (found) return true
+        }
+        return false
+    }
+
+    /**
+     * True when the active window is the Home feed. Home is selected (`feed_tab` selected), OR
+     * on IG cold start no bottom tab is reported selected yet (then we assume Home so the lock
+     * can engage immediately). Returns false when a different tab is confirmed selected.
+     */
+    private fun isOnHomeFeedTab(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        val rid = node.viewIdResourceName
+        if (rid != null && rid == "com.instagram.android:id/feed_tab") {
+            if (node.isSelected || node.isChecked) return true
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = isOnHomeFeedTab(child, depth + 1)
+            child.recycle()
+            if (result) return true
+        }
+        return false
+    }
+
+    /**
+     * Home is assumed when the Home tab is selected OR when NO other bottom tab is reported
+     * selected (IG cold start reports no selection; the Lock-Home-Feed precedent treats that as
+     * Home so the lock engages immediately).
+     */
+    private fun isOnHomeTabGivenSelection(root: AccessibilityNodeInfo): Boolean {
+        if (isOnHomeFeedTab(root, 0)) return true
+        val otherSelected = findSelectedBottomTab(root, 0)
+        return otherSelected == null
+    }
+
+    /**
+     * True when a bottom-nav tab OTHER than feed_tab is reported selected. `null` when no such
+     * tab is selected anywhere. Only nodes in the bottom band (y >= 72% of screen) count: a
+     * transiently-selected `_tab` mid-tree (stories sub-tabs, sheets, carousels) must not clear
+     * the cold-start "assume Home" fallback.
+     */
+    private fun findSelectedBottomTab(node: AccessibilityNodeInfo?, depth: Int): Boolean? {
+        if (node == null || depth > 25) return null
+        val rid = node.viewIdResourceName
+        if (rid != null && rid.endsWith("_tab") && rid != "com.instagram.android:id/feed_tab") {
+            if (node.isSelected || node.isChecked) {
+                val b = Rect()
+                node.getBoundsInScreen(b)
+                val screenHeight = resources.displayMetrics.heightPixels.toFloat()
+                if (screenHeight > 0 && b.top / screenHeight >= 0.72f) return true
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findSelectedBottomTab(child, depth + 1)
+            child.recycle()
+            if (found == true) return true
+        }
+        return null
+    }
+
+    /** Click the bottom-nav Home tab so the feed snaps back to the top. */
+    private fun pressHome() {
+        try {
+            val root = getRootInActiveWindow()
+            if (root == null) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: press skipped, no active window")
+                return
+            }
+            val homeTab = findFeedTab(root, 0)
+            if (homeTab == null) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: Home button not found")
+                root.recycle()
+                return
+            }
+            val clicked = homeTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: pressed Home -> snap to top (reload accepted) clicked=$clicked")
+            homeTab.recycle()
+            root.recycle()
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "pressHome error", e)
+        }
+    }
+
+    /** Finds the bottom-nav Home tab node (com.instagram.android:id/feed_tab). */
+    private fun findFeedTab(node: AccessibilityNodeInfo?, depth: Int): AccessibilityNodeInfo? {
+        if (node == null || depth > 25) return null
+        if (node.viewIdResourceName == "com.instagram.android:id/feed_tab") return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findFeedTab(child, depth + 1)
+            if (found != null) return found
+            child.recycle()
+        }
+        return null
+    }
+
+    /**
+     * The Stories tray is a wide horizontal scrollable that appears only at the top of the
+     * Home feed (it scrolls up and is then removed from the tree entirely). Presence + visible
+     * on-screen bounds = we are at the top. isVisibleToUser is critical: Instagram pre-renders
+     * off-screen pages (profile highlights trays, adjacent tab surfaces) in the same tree with
+     * bounds that pass the at-top test but are NOT shown; matching those is a false "at top".
+     */
+    private fun findStoriesTray(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        if (node.isScrollable && node.isVisibleToUser) {
+            val b = Rect()
+            node.getBoundsInScreen(b)
+            val dm = resources.displayMetrics
+            val screenWidth = dm.widthPixels.toFloat()
+            val screenHeight = dm.heightPixels.toFloat()
+            val trayHeight = (b.bottom - b.top).toFloat()
+            if (screenWidth > 0 && screenHeight > 0 &&
+                b.top > BLOCK_FEED_TRAY_TOP && b.top < BLOCK_FEED_TRAY_BOTTOM &&
+                b.width() / screenWidth >= BLOCK_FEED_TRAY_WIDTH_RATIO &&
+                trayHeight <= BLOCK_FEED_TRAY_MAX_HEIGHT &&
+                trayHeight / screenHeight >= BLOCK_FEED_TRAY_MIN_HEIGHT_RATIO &&
+                b.bottom > 0 && b.top < b.bottom) {
+                return true
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findStoriesTray(child, depth + 1)
+            child.recycle()
+            if (found) return true
+        }
+        return false
     }
 
     private fun resetClipsSession(reason: String) {
@@ -459,6 +798,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacks(pressHomeRunnable)
+        mainHandler.removeCallbacks(openFeedEvalRunnable)
         try {
             unregisterReceiver(dumpReceiver)
         } catch (_: Exception) {

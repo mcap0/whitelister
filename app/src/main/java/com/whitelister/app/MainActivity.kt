@@ -41,6 +41,7 @@ fun MainScreen() {
     val context = LocalContext.current
     var isAccessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var reelsBlockingEnabled by remember { mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context)) }
+    var blockFeedEnabled by remember { mutableStateOf(PreferencesManager.isBlockFeedEnabled(context)) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -103,6 +104,29 @@ fun MainScreen() {
                     onCheckedChange = { enabled ->
                         reelsBlockingEnabled = enabled
                         PreferencesManager.setReelsBlockingEnabled(context, enabled)
+                    },
+                    enabled = isAccessibilityEnabled
+                )
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Block Feed", style = MaterialTheme.typography.bodyLarge)
+                    Text("Snaps the feed back to the top", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    checked = blockFeedEnabled,
+                    onCheckedChange = { enabled ->
+                        blockFeedEnabled = enabled
+                        PreferencesManager.setBlockFeedEnabled(context, enabled)
                     },
                     enabled = isAccessibilityEnabled
                 )
