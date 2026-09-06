@@ -158,7 +158,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         } else {
             registerReceiver(dumpReceiver, filter)
         }
-        Log.d(TAG, "Service connected")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Service connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -741,12 +741,13 @@ class WhitelistAccessibilityService : AccessibilityService() {
             sb.append(" bounds=$b")
             src.recycle()
         }
-        Log.d(TAG, sb.toString())
+        if (BuildConfig.DEBUG) Log.d(TAG, sb.toString())
     }
 
     private var lastTreeDump = 0L
 
     private fun dumpTree(label: String) {
+        if (!BuildConfig.DEBUG) return
         val now = System.currentTimeMillis()
         if (now - lastTreeDump < 3000L) return
         lastTreeDump = now
@@ -793,7 +794,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        Log.d(TAG, "Service interrupted")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Service interrupted")
     }
 
     override fun onDestroy() {
@@ -804,6 +805,6 @@ class WhitelistAccessibilityService : AccessibilityService() {
             unregisterReceiver(dumpReceiver)
         } catch (_: Exception) {
         }
-        Log.d(TAG, "Service destroyed")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Service destroyed")
     }
 }
