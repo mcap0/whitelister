@@ -2,51 +2,57 @@ package com.whitelister.app
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Rect
-import android.os.Handler
-import android.os.Looper
-import android.util.DisplayMetrics
+import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
-@Suppress("DEPRECATION")
 class WhitelistAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "WhitelistService"
-        private const val REELS_COOLDOWN_MS = 2000L
-        private const val CONTENT_DETECT_THROTTLE_MS = 500L
-        private const val FULLSCREEN_RATIO = 0.7f
-        private const val BLOCK_HOME_THROTTLE_MS = 1000L
-        private const val REELS_GRACE_MS = 1000L
-        private const val BOUNCE_SETTLE_MS = 2000L
+        private const val ACTION_DUMP = "com.whitelister.app.DUMP"
+
+        private const val CLIPS_PAGER_ID = "com.instagram.android:id/clips_viewer_view_pager"
+        private const val FEED_LIST_ID = "android:id/list"
+
+        /** Loop protection only (not a grace period): pause BACK re-actions this long after we issue one. */
+        private const val BACK_COOLDOWN_MS = 2000L
+
+        /** Throttle for the accessibility-tree viewer scans on content changes. */
+        private const val TREE_SYNC_THROTTLE_MS = 500L
+
+        /** A node is "fullscreen" (the reel viewer is engaged) when it covers this share of the screen. */
+        private const val FULLSCREEN_RATIO = 0.6f
     }
 
-    private val handler = Handler(Looper.getMainLooper())
-    private var lastReelsBlockTime = 0L
-    private var lastContentDetectTime = 0L
-    private var lastBlockHomeTime = 0L
-    private var isInReelsViewer = false
-    private var reelsEnteredAt = 0L
-    private var lastBounceAt = 0L
-    private var sawTopSinceBounce = false
-    // True while the Instagram in-app browser (BrowserLiteInMainProcessIGActivity) is
-    // the active window. Kept in sync on TYPE_WINDOW_STATE_CHANGED so neither Reels
-    // blocking nor Lock Home Feed can act while the user browses an external website.
-    private var inIgBrowser = false
+    // --- Reels-blocking state machine (empirical, source-based) ---
+    private var clipsActive = false
+    // The clips pager's current reel index. It is kept across viewer sessions because
+    // Instagram's reel viewer pager retains its position while hidden, so the blocker
+    // is armed with a known baseline the moment the viewer appears again. -1 = unknown
+    // (cold start / feed-open reposition).
+    private var clipsPage = -1
+    private var clipsPageConfirmed = false
+    private var lastBackAt = 0L
+    private var lastTreeSyncAt = 0L
 
-    private fun logD(message: String) {
-        if (BuildConfig.DEBUG) Log.d(TAG, message)
-    }
-
-    private fun logE(message: String, throwable: Throwable) {
-        if (BuildConfig.DEBUG) Log.e(TAG, message, throwable)
+    private val dumpReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ACTION_DUMP) {
+                lastTreeDump = 0L
+                dumpTree("ADB")
+            }
+        }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-
         val info = AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
@@ -56,446 +62,305 @@ class WhitelistAccessibilityService : AccessibilityService() {
         info.flags = info.flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         setServiceInfo(info)
-
-        logD("WhitelistAccessibilityService connected")
+        val filter = IntentFilter(ACTION_DUMP)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(dumpReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(dumpReceiver, filter)
+        }
+        Log.d(TAG, "Service connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.packageName != "com.instagram.android") return
-
-        val reelsEnabled = PreferencesManager.isReelsBlockingEnabled(this)
-        val blockHomeEnabled = PreferencesManager.isBlockHomeFeedEnabled(this)
+        if (event.packageName?.toString() != "com.instagram.android") return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                inIgBrowser = event.className?.toString()?.
-                    lowercase()?.contains("inappbrowser") == true
-                if (reelsEnabled) {
-                    detectReelsViewer()
-                } else {
-                    isInReelsViewer = false
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "WINDOW_STATE className=${event.className}")
+                    dumpTree("WINDOW_STATE")
                 }
-                if (blockHomeEnabled) {
-                    // A new Instagram window means a fresh session: never inherit
-                    // stale lock-home state from before. Reset the transient fields
-                    // and evaluate once (without pressing) so the machine starts
-                    // from a consistent state on the very first interaction.
-                    lastBlockHomeTime = 0
-                    lastBounceAt = 0
-                    sawTopSinceBounce = false
-                    applyBlockHomeFeed(evaluateOnly = true)
-                }
+                resetClipsSession("app window change")
+                syncViewerFromTree("window")
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                if (reelsEnabled) {
-                    val now = System.currentTimeMillis()
-                    if (now - lastContentDetectTime >= CONTENT_DETECT_THROTTLE_MS) {
-                        lastContentDetectTime = now
-                        detectReelsViewer()
-                    }
+                val now = System.currentTimeMillis()
+                if (now - lastTreeSyncAt >= TREE_SYNC_THROTTLE_MS) {
+                    lastTreeSyncAt = now
+                    syncViewerFromTree("content")
                 }
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                if (reelsEnabled) {
-                    if (!isInReelsViewer) {
-                        val now = System.currentTimeMillis()
-                        if (now - lastContentDetectTime >= CONTENT_DETECT_THROTTLE_MS) {
-                            lastContentDetectTime = now
-                            detectReelsViewer()
-                        }
-                    }
-                    if (isInReelsViewer) {
-                        val sinceEnter = System.currentTimeMillis() - reelsEnteredAt
-                        if (sinceEnter >= REELS_GRACE_MS) {
-                            blockReels()
-                        } else {
-                            logD("Reels: within grace ($sinceEnter ms), ignore scroll")
-                        }
-                    }
-                }
-                if (blockHomeEnabled) applyBlockHomeFeed()
+                onViewScrolled(event)
             }
         }
     }
 
-    private fun detectReelsViewer() {
-        if (isIgBrowserActive(null)) {
-            isInReelsViewer = false
-            return
-        }
-        val wasInViewer = isInReelsViewer
-        isInReelsViewer = false
+    private fun onViewScrolled(event: AccessibilityEvent) {
+        if (BuildConfig.DEBUG) logScrollEvent(event)
+        val src = event.source ?: return
+        val rid = src.viewIdResourceName
 
-        try {
-            val rootNode = getRootInActiveWindow() ?: return
-            if (isIgBrowserActive(rootNode)) {
-                isInReelsViewer = false
-                rootNode.recycle()
-                return
-            }
-            isInReelsViewer = isReelsTabSelected(rootNode, 0) ||
-                    isFullscreenReelViewer(rootNode, 0)
-            rootNode.recycle()
-            // On entering the viewer, arm the grace period so the scroll event
-            // emitted by simply opening a reel doesn't immediately back out.
-            if (isInReelsViewer && !wasInViewer) {
-                reelsEnteredAt = System.currentTimeMillis()
-                logD("Reels viewer entered; grace until ${reelsEnteredAt + REELS_GRACE_MS}")
-            }
-            logD("Reels viewer detection: $isInReelsViewer")
-        } catch (e: Exception) {
-            logE("Error detecting reels viewer", e)
+        if (rid == CLIPS_PAGER_ID) {
+            onClipsPagerScroll(event)
+        } else {
+            onNonClipsScroll(rid)
         }
     }
 
-    private fun isReelsTabSelected(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 15) return false
-
-        val viewId = node.viewIdResourceName
-        if (viewId != null && viewId.contains("clips_tab") && node.isSelected) {
-            logD("Reels TAB detected: $viewId isSelected=true")
-            return true
-        }
-
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = isReelsTabSelected(child, depth + 1)
-            child.recycle()
-            if (found) return true
-        }
-
-        return false
-    }
-
-    private fun isFullscreenReelViewer(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 15) return false
-
-        val viewId = node.viewIdResourceName
-        if (viewId != null) {
-            val isReelContainer = viewId.contains("clips") || viewId.contains("reel")
-            if (isReelContainer && isNodeFullscreen(node)) {
-                logD("Fullscreen reel viewer detected: $viewId")
-                return true
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = isFullscreenReelViewer(child, depth + 1)
-            child.recycle()
-            if (found) return true
-        }
-
-        return false
-    }
-
-    private fun isNodeFullscreen(node: AccessibilityNodeInfo): Boolean {
-        val bounds = Rect()
-        node.getBoundsInScreen(bounds)
-        if (bounds.isEmpty) return false
-
-        val metrics = DisplayMetrics()
-        val display = getSystemService(android.view.WindowManager::class.java)?.defaultDisplay
-        if (display == null) return false
-        display.getRealMetrics(metrics)
-
-        val screenArea = metrics.widthPixels.toFloat() * metrics.heightPixels.toFloat()
-        val nodeArea = bounds.width().toFloat() * bounds.height().toFloat()
-        if (screenArea <= 0) return false
-
-        return (nodeArea / screenArea) >= FULLSCREEN_RATIO
-    }
-
-    // True when the Instagram in-app browser is on screen. The activity-level state
-    // (tracked from TYPE_WINDOW_STATE_CHANGED class names) covers the normal case;
-    // the tree scan is a fallback for events that arrive without a preceding window
-    // change, matching the browser's WebView classes or its BrowserLite activity name.
-    private fun isIgBrowserActive(root: AccessibilityNodeInfo?): Boolean {
-        if (inIgBrowser) return true
-        return root?.let { containsBrowserClass(it, 0) } ?: false
-    }
-
-    private fun containsBrowserClass(node: AccessibilityNodeInfo, depth: Int): Boolean {
-        if (depth > 25) return false
-        val cls = node.className?.toString()?.lowercase()
-        if (cls != null && (cls.contains("webview") || cls.contains("browser"))) return true
-        for (i in 0 until node.childCount) {
-            val c = node.getChild(i) ?: continue
-            val found = containsBrowserClass(c, depth + 1)
-            c.recycle()
-            if (found) return true
-        }
-        return false
-    }
-
-    private fun blockReels() {
+    private fun onClipsPagerScroll(event: AccessibilityEvent) {
+        // IG reports the pager's current reel index here and fromIndex/toIndex can be
+        // either the page being left or the page just entered (reporting is unreliable
+        // across flings). Use the larger of the two so a completed reel transition is
+        // always detected against clipsPage, while a pure settle (fromIndex==toIndex)
+        // still passes. This closes the "one free scroll" in the Reels tab without
+        // weakening the feed-open path (it can only block more, never less).
+        val cur = maxOf(event.fromIndex, event.toIndex)
         val now = System.currentTimeMillis()
-        if (now - lastReelsBlockTime < REELS_COOLDOWN_MS) return
 
-        lastReelsBlockTime = now
-        handler.post {
-            var root: AccessibilityNodeInfo? = null
-            try {
-                root = getRootInActiveWindow()
-                if (isIgBrowserActive(root)) {
-                    return@post
-                }
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                logD("Reels blocked - BACK action performed")
-            } catch (e: Exception) {
-                logE("Failed to perform back action", e)
-            } finally {
-                root?.recycle()
-            }
-        }
-        isInReelsViewer = false
-    }
-
-    // ---- Lock Home feed: keep the user at the top (Stories only) on the For You tab ----
-    // Bounces by pressing the bottom-nav Home button (which on Instagram natively
-    // scrolls the feed back to the top). "At top" is detected via the Stories tray
-    // (a wide horizontal scrollable): diagnostic data showed it exists at the top
-    // of the feed, scrolls up, and is REMOVED from the accessibility tree entirely
-    // once you scroll past it. So tray present + visible -> at top, do nothing;
-    // tray gone -> scrolled down, press Home.
-    // Loop protection: after a bounce we hold for BOUNCE_SETTLE_MS and only press
-    // again after the tray has been SEEN at top again. If the user keeps scrolling
-    // (bypass) and the tray never comes back, we detect that and press Home too,
-    // so the lock fights back while the feed never reaches a settled top.
-
-    private fun getScreenWidth(): Int {
-        val metrics = DisplayMetrics()
-        getSystemService(android.view.WindowManager::class.java)?.defaultDisplay?.getMetrics(metrics)
-        return metrics.widthPixels
-    }
-
-    private fun getScreenHeight(): Int {
-        val metrics = DisplayMetrics()
-        getSystemService(android.view.WindowManager::class.java)?.defaultDisplay?.getMetrics(metrics)
-        return metrics.heightPixels
-    }
-
-    // True when a bottom-nav tab other than Home is the selected one. Only nodes in
-    // the bottom band of the screen count, so feed elements that happen to mention
-    // matching words (e.g. "profile", "search") cannot be mistaken for the nav bar.
-    private fun isOtherNavTabSelected(root: AccessibilityNodeInfo): Boolean {
-        val screenH = getScreenHeight()
-        val otherLabels = listOf(
-            "search", "ricerca", "cerca",
-            "reel", "clips",
-            "shop", "negozio",
-            "profile", "profilo"
-        )
-        var selected = false
-        fun scan(node: AccessibilityNodeInfo, depth: Int) {
-            if (selected || depth > 20) return
-            val cd = node.contentDescription?.toString()?.lowercase()
-            if (cd != null && otherLabels.any { cd.contains(it) } && (node.isSelected || node.isChecked)) {
-                val b = Rect()
-                node.getBoundsInScreen(b)
-                if (!b.isEmpty && b.top > screenH * 0.72f) {
-                    selected = true
-                    return
-                }
-            }
-            for (i in 0 until node.childCount) {
-                val c = node.getChild(i) ?: continue
-                scan(c, depth + 1)
-                c.recycle()
-            }
-        }
-        scan(root, 0)
-        return selected
-    }
-
-    private fun findStoriesTray(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val screenW = getScreenWidth()
-        var best: AccessibilityNodeInfo? = null
-        fun scan(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > 20 || best != null) return
-            if (node.isScrollable) {
-                val b = Rect()
-                node.getBoundsInScreen(b)
-                val w = b.width()
-                val h = b.height()
-                val isHorizontal = w > h
-                // >= 400px above the app bar counts as "still at/near the top" so a
-                // partially-scrolled-off tray is still recognised until it is gone.
-                val nearTop = b.top > -400 && b.top < 600
-                val wide = w > screenW * 0.5
-                if (isHorizontal && nearTop && wide) {
-                    best = node
-                    return
-                }
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { c -> scan(c, depth + 1); c.recycle() }
-            }
-        }
-        scan(root, 0)
-        return best
-    }
-
-    // True when the feed is already at the top (so the service must not press Home).
-    private fun isFeedAtTop(root: AccessibilityNodeInfo): Boolean {
-        val tray = findStoriesTray(root)
-        if (tray != null) {
-            val b = Rect()
-            tray.getBoundsInScreen(b)
-            val visible = b.bottom > 0 && b.top < b.bottom
-            tray.recycle()
-            return visible
-        }
-        return false
-    }
-
-    private fun applyBlockHomeFeed(evaluateOnly: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (now - lastBlockHomeTime < BLOCK_HOME_THROTTLE_MS) return
-
-        // Never interfere while the in-app browser is open: the bottom-nav "home"
-        // button can be present behind/above the browser (or a web "home" element can
-        // match), so pressing here would bounce the user out of the website.
-        if (isIgBrowserActive(null)) {
+        if (now - lastBackAt < BACK_COOLDOWN_MS) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: cooldown after BACK, ignoring clips scroll")
             return
         }
 
-        // Never interfere while a Reels viewer is open (let Reels blocking handle it).
-        if (isInReelsViewer) {
-            logD("LockHome: in Reels viewer, skip")
+        if (!clipsActive) {
+            // Viewer not armed by the tree yet (e.g. first scroll raced the sync).
+            // Establish the baseline before it can be compared against.
+            clipsActive = true
+            clipsPage = cur
+            clipsPageConfirmed = false
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer open at page $cur")
             return
         }
 
+        if (clipsPage == -1) {
+            // Viewer visible but baseline unknown: reel-tab on a cold start, or the
+            // pager was repositioned by a feed-open.
+            if (event.fromIndex == event.toIndex) {
+                // Settle/positioning event at the reel currently shown: absorb it as
+                // the baseline so a genuine page change (a swipe) is what triggers the
+                // BACK below, not the viewer open itself.
+                clipsPage = cur
+                clipsPageConfirmed = true
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer baseline at page $cur")
+            } else {
+                // A genuine swipe arrived before any settle (ultra-fast cold-start
+                // flick, no settle emitted). Block it outright: there is no baseline
+                // to protect, so this is the user scrolling.
+                if (PreferencesManager.isReelsBlockingEnabled(this)) {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE (no baseline) ${event.fromIndex}->$cur, issuing BACK")
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    lastBackAt = now
+                    clipsActive = false
+                    clipsPage = cur
+                    clipsPageConfirmed = false
+                } else {
+                    clipsPage = cur
+                    clipsPageConfirmed = false
+                }
+            }
+            return
+        }
+
+        if (cur == clipsPage) {
+            if (!clipsPageConfirmed) {
+                clipsPageConfirmed = true
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer settled at page $cur")
+            }
+            return
+        }
+
+        // Page changed. No open-anim absorb: the feed can auto-advance a reel before
+        // we tap it, so the "open settle" would grant a free pass. Every page move is
+        // treated as a swipe to block.
+        if (PreferencesManager.isReelsBlockingEnabled(this)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE ${clipsPage}->$cur, issuing BACK")
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            lastBackAt = now
+            clipsActive = false
+        } else {
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE ${clipsPage}->$cur (blocking disabled)")
+            clipsPage = cur
+            clipsPageConfirmed = false
+        }
+    }
+
+    private fun onNonClipsScroll(rid: String?) {
+        if (clipsActive) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "blocker: reels viewer closed (feed scroll source=$rid)")
+            resetClipsSession("feed scroll")
+        }
+    }
+
+    private fun resetClipsSession(reason: String) {
+        val wasActive = clipsActive
+        clipsActive = false
+        // Keep clipsPage: the clips pager retains its position while hidden, so on the
+        // next viewer appearance the blocker is armed with a known baseline (no free pass
+        // for the first real swipe). -1 is only used for a genuinely unknown page.
+        clipsPageConfirmed = false
+        if (BuildConfig.DEBUG && wasActive) {
+            Log.d(TAG, "blocker: clips session reset ($reason)")
+        }
+    }
+
+    /**
+     * Arms the reels blocker from the accessibility tree so it is engaged the instant the
+     * full-screen reel viewer appears -- before any scroll event -- instead of relying on the
+     * first scroll to arm it (which lets a fast first flick slip by).
+     *
+     * This NEVER disarms. Making it two-way is unsafe: transient layouts during the viewer's
+     * open animation make the pager report sub-fullscreen bounds, and a false disarm re-opens
+     * the free-pass window. The armed state is only ended by a non-clips feed scroll
+     * (onNonClipsScroll) or by the BACK issued after a blocked swipe.
+     *
+     * When the reel TAB is selected the pager's page is continuous (it keeps its position),
+     * so clipsPage is retained. When the viewer opens from the feed or a grid, the pager was
+     * repositioned and the baseline is reset to -1 (re-established from the settle on the
+     * next clips scroll).
+     */
+    private fun syncViewerFromTree(reason: String) {
         val root = getRootInActiveWindow() ?: return
         try {
-            if (isIgBrowserActive(root)) {
-                return
-            }
-            val homeBtn = findBottomNavButton(root, "home") ?: findBottomNavButton(root, "casa")
-            if (homeBtn == null) {
-                logD("LockHome: Home button not found")
-                return
-            }
-            val homeSelected = homeBtn.isSelected || homeBtn.isChecked
-            val otherTabSelected = !homeSelected && isOtherNavTabSelected(root)
-            if (!homeSelected && otherTabSelected) {
-                logD("LockHome: not on Home tab, skip")
-                homeBtn.recycle()
-                return
-            }
-            if (!homeSelected && !otherTabSelected) {
-                // Cold-start quirk: on a freshly opened Instagram no nav tab is
-                // reported as selected yet, but the Home button exists and no other
-                // tab is selected, so treat the feed as Home.
-                logD("LockHome: no nav tab selected yet, assuming Home (cold start)")
-            }
-            if (isOnFavorites(root)) {
-                logD("LockHome: on Favorites, skip")
-                homeBtn.recycle()
-                return
-            }
-            // At the top: tray present and visible -> never press here (a press at
-            // the top is what causes the pull-to-refresh loop).
-            if (isFeedAtTop(root)) {
-                sawTopSinceBounce = true
-                logD("LockHome: at top (Stories tray visible), re-armed")
-                homeBtn.recycle()
-                return
-            }
-            // Past the Stories (tray gone). If the tray has been observed at top
-            // since the last bounce, this is a normal scrolled-down -> bounce.
-            if (sawTopSinceBounce) {
-                if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
-                    logD("LockHome: settling after bounce, hold")
-                    homeBtn.recycle()
-                    return
+            val reelTabSelected = isReelTabSelected(root, 0)
+            val pagerFullscreen = isFullscreenClipsPager(root, 0)
+            if (pagerFullscreen) {
+                val wasEnabled = clipsActive
+                clipsActive = true
+                if (!reelTabSelected) {
+                    clipsPage = -1
+                    clipsPageConfirmed = false
                 }
-                if (evaluateOnly) {
-                    logD("LockHome: eval-only, would bounce to top")
-                    homeBtn.recycle()
-                    return
+                if (BuildConfig.DEBUG && (!wasEnabled || clipsPage == -1)) {
+                    Log.d(TAG, "blocker: viewer armed via tree ($reason) tab=$reelTabSelected page=$clipsPage")
                 }
-                lastBlockHomeTime = now
-                lastBounceAt = now
-                sawTopSinceBounce = false
-                homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                logD("LockHome: pressed Home -> bounce to top (reload accepted)")
-                homeBtn.recycle()
-                return
             }
-            // Bypass catch: the tray has NOT been seen at top since the last bounce,
-            // yet we are not at top either — the user scrolled through the snap-back.
-            // Lock them again (only after the settle window so the return animation
-            // of the previous bounce does not cause a press of its own).
-            if (now - lastBounceAt < BOUNCE_SETTLE_MS) {
-                logD("LockHome: settling after bounce, hold")
-                homeBtn.recycle()
-                return
-            }
-            if (evaluateOnly) {
-                logD("LockHome: eval-only, would bounce (bypass)")
-                homeBtn.recycle()
-                return
-            }
-            lastBlockHomeTime = now
-            lastBounceAt = now
-            homeBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            logD("LockHome: bypass detected -> pressed Home (lock again)")
-            homeBtn.recycle()
         } catch (e: Exception) {
-            logE("Error in block home feed", e)
+            if (BuildConfig.DEBUG) Log.e(TAG, "syncViewerFromTree error", e)
         } finally {
             root.recycle()
         }
     }
 
-    private fun findBottomNavButton(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? {
-        var result: AccessibilityNodeInfo? = null
-        fun scan(node: AccessibilityNodeInfo, depth: Int) {
-            if (result != null || depth > 20) return
-            val cd = node.contentDescription?.toString()?.lowercase()
-            if (cd != null && cd.contains(label)) {
-                result = node
-                return
-            }
-            for (i in 0 until node.childCount) {
-                val c = node.getChild(i) ?: continue
-                scan(c, depth + 1)
-                c.recycle()
-            }
+    private fun isReelTabSelected(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        val rid = node.viewIdResourceName
+        if (rid != null && rid.contains("clips_tab") && node.isSelected) return true
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = isReelTabSelected(child, depth + 1)
+            child.recycle()
+            if (found) return true
         }
-        scan(root, 0)
-        return result
+        return false
     }
 
-    private fun isOnFavorites(root: AccessibilityNodeInfo): Boolean {
-        var found = false
-        fun scan(node: AccessibilityNodeInfo, depth: Int) {
-            if (found || depth > 20) return
-            val t = node.text?.toString()?.lowercase()
-            val cd = node.contentDescription?.toString()?.lowercase()
-            if ((t != null && (t.contains("preferiti") || t.contains("favorites"))) ||
-                (cd != null && (cd.contains("preferiti") || cd.contains("favorites")))) {
-                found = true
-                return
-            }
-            for (i in 0 until node.childCount) {
-                val c = node.getChild(i) ?: continue
-                scan(c, depth + 1)
-                c.recycle()
-            }
+    private fun isFullscreenClipsPager(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        val rid = node.viewIdResourceName
+        if (rid != null && (rid.contains("clips_viewer_view_pager") ||
+                rid.contains("reel_viewer") || rid.contains("clips_video_container"))) {
+            val b = Rect()
+            node.getBoundsInScreen(b)
+            if (isNodeFullscreen(b)) return true
         }
-        scan(root, 0)
-        return found
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = isFullscreenClipsPager(child, depth + 1)
+            child.recycle()
+            if (found) return true
+        }
+        return false
+    }
+
+    private fun isNodeFullscreen(bounds: Rect): Boolean {
+        if (bounds.isEmpty) return false
+        val dm = resources.displayMetrics
+        val screenArea = dm.widthPixels.toFloat() * dm.heightPixels.toFloat()
+        if (screenArea <= 0) return false
+        val nodeArea = bounds.width().toFloat() * bounds.height().toFloat()
+        return nodeArea / screenArea >= FULLSCREEN_RATIO
+    }
+
+    private fun logScrollEvent(event: AccessibilityEvent) {
+        val sb = StringBuilder()
+        sb.append("SCROLLED")
+        sb.append(" fromIndex=${event.fromIndex}")
+        sb.append(" toIndex=${event.toIndex}")
+        val src = event.source
+        if (src == null) {
+            sb.append(" source=null")
+        } else {
+            val b = Rect()
+            src.getBoundsInScreen(b)
+            sb.append(" source cls=${src.className}")
+            sb.append(" id=${src.viewIdResourceName}")
+            sb.append(" scrollable=${src.isScrollable}")
+            sb.append(" bounds=$b")
+            src.recycle()
+        }
+        Log.d(TAG, sb.toString())
+    }
+
+    private var lastTreeDump = 0L
+
+    private fun dumpTree(label: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastTreeDump < 3000L) return
+        lastTreeDump = now
+        val root = getRootInActiveWindow() ?: return
+        try {
+            Log.d(TAG, "--- TREE $label ---")
+            val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+            stack.add(root to 0)
+            while (stack.isNotEmpty()) {
+                val (node, depth) = stack.removeLast()
+                if (depth > 25) continue
+                val b = Rect()
+                node.getBoundsInScreen(b)
+                val rid = node.viewIdResourceName
+                val isInteresting = rid != null && (
+                        rid.contains("clips") || rid.contains("reel") ||
+                        rid.contains("story") || rid.contains("feed") ||
+                        rid.contains("tab") || rid.contains("pager") ||
+                        rid.contains("list") || rid.contains("is_translation") ||
+                        rid.contains("name")) ||
+                        node.isScrollable ||
+                        node.contentDescription != null
+                if (isInteresting && (node.isVisibleToUser || depth < 8)) {
+                    val cn = node.className?.toString()?.substringAfterLast('.') ?: "?"
+                    Log.d(TAG, "${"  ".repeat(depth)}[$cn] " +
+                            "id=$rid text='${node.text}' " +
+                            "sel=${node.isSelected} chk=${node.isChecked} scroll=${node.isScrollable} " +
+                            "vis=${node.isVisibleToUser} bounds=$b")
+                }
+                var child = node.getChild(0)
+                var i = 0
+                while (child != null) {
+                    stack.add(child to depth + 1)
+                    i++
+                    child = if (i < node.childCount) node.getChild(i) else null
+                }
+            }
+            Log.d(TAG, "--- END TREE ---")
+        } catch (e: Exception) {
+            Log.e(TAG, "dumpTree error", e)
+        } finally {
+            root.recycle()
+        }
     }
 
     override fun onInterrupt() {
-        logD("WhitelistAccessibilityService interrupted")
+        Log.d(TAG, "Service interrupted")
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        logD("WhitelistAccessibilityService destroyed")
+        try {
+            unregisterReceiver(dumpReceiver)
+        } catch (_: Exception) {
+        }
+        Log.d(TAG, "Service destroyed")
     }
 }

@@ -9,10 +9,6 @@ import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,7 +29,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppRoot()
+                    MainScreen()
                 }
             }
         }
@@ -41,128 +37,20 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AppRoot() {
+fun MainScreen() {
     val context = LocalContext.current
-    var consentAccepted by remember {
-        mutableStateOf(PreferencesManager.isConsentAccepted(context))
-    }
-    var showPolicy by remember { mutableStateOf(false) }
-
-    when {
-        !consentAccepted -> ConsentScreen(
-            onAccept = {
-                PreferencesManager.setConsentAccepted(context, true)
-                consentAccepted = true
-            },
-            onDecline = { (context as? ComponentActivity)?.finish() },
-            onViewPolicy = { showPolicy = true }
-        )
-        showPolicy -> PolicyScreen(onClose = { showPolicy = false })
-        else -> WhitelisterScreen(onOpenPolicy = { showPolicy = true })
-    }
-}
-
-@Composable
-fun ConsentScreen(
-    onAccept: () -> Unit,
-    onDecline: () -> Unit,
-    onViewPolicy: () -> Unit
-) {
-    val context = LocalContext.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            text = getString(context, R.string.consent_title),
-            style = MaterialTheme.typography.headlineSmall
-        )
-        Text(
-            text = getString(context, R.string.consent_body),
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Button(
-            onClick = onViewPolicy,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(getString(context, R.string.view_privacy_policy))
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        Button(
-            onClick = onAccept,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(getString(context, R.string.consent_accept))
-        }
-        OutlinedButton(
-            onClick = onDecline,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(getString(context, R.string.consent_decline))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PolicyScreen(onClose: () -> Unit) {
-    val context = LocalContext.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        TopAppBar(
-            title = { Text(getString(context, R.string.privacy_policy_title)) },
-            actions = {
-                IconButton(onClick = onClose) {
-                    Text(getString(context, R.string.close))
-                }
-            }
-        )
-        Text(
-            text = getString(context, R.string.privacy_policy_text),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
-    val context = LocalContext.current
-    var isAccessibilityEnabled by remember {
-        mutableStateOf(isAccessibilityServiceEnabled(context))
-    }
-    var reelsBlockingEnabled by remember {
-        mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context))
-    }
-    var blockHomeFeedEnabled by remember {
-        mutableStateOf(PreferencesManager.isBlockHomeFeedEnabled(context))
-    }
+    var isAccessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var reelsBlockingEnabled by remember { mutableStateOf(PreferencesManager.isReelsBlockingEnabled(context)) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
-                reelsBlockingEnabled = PreferencesManager.isReelsBlockingEnabled(context)
-                blockHomeFeedEnabled = PreferencesManager.isBlockHomeFeedEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Column(
@@ -170,140 +58,58 @@ fun WhitelisterScreen(onOpenPolicy: () -> Unit) {
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        TopAppBar(
-            title = { Text(getString(context, R.string.app_name)) },
-            actions = {
-                IconButton(onClick = onOpenPolicy) {
-                    Icon(
-                        Icons.Filled.Info,
-                        contentDescription = getString(context, R.string.privacy_info)
-                    )
+        Text("Whitelister", style = MaterialTheme.typography.headlineMedium)
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = if (isAccessibilityEnabled) "Service Active" else "Service Disabled",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (isAccessibilityEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                Button(
+                    onClick = {
+                        if (!isAccessibilityEnabled) {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isAccessibilityEnabled) "Service Active" else "Enable Service")
                 }
             }
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Accessibility Service Status
-            Card(
-                modifier = Modifier.fillMaxWidth()
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = getString(context, R.string.accessibility_service_title),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = if (isAccessibilityEnabled) {
-                            getString(context, R.string.accessibility_enabled)
-                        } else {
-                            getString(context, R.string.accessibility_disabled)
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isAccessibilityEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
-                    Button(
-                        onClick = {
-                            if (!isAccessibilityEnabled) {
-                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            if (isAccessibilityEnabled) {
-                                getString(context, R.string.service_active)
-                            } else {
-                                getString(context, R.string.enable_service)
-                            }
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Remove Reels", style = MaterialTheme.typography.bodyLarge)
+                    Text("Blocks scrolling between reels", style = MaterialTheme.typography.bodySmall)
                 }
-            }
-
-            // Instagram Features
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = getString(context, R.string.instagram_features_title),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-
-                    // Remove Reels Toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                getString(context, R.string.remove_reels_title),
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                getString(context, R.string.remove_reels_summary),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Switch(
-                            checked = reelsBlockingEnabled,
-                            onCheckedChange = { enabled ->
-                                reelsBlockingEnabled = enabled
-                                PreferencesManager.setReelsBlockingEnabled(context, enabled)
-                            },
-                            enabled = isAccessibilityEnabled
-                        )
-                    }
-
-                    HorizontalDivider()
-
-                    // Lock Home Feed Toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                getString(context, R.string.block_home_feed_title),
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                getString(context, R.string.block_home_feed_summary),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Switch(
-                            checked = blockHomeFeedEnabled,
-                            onCheckedChange = { enabled ->
-                                blockHomeFeedEnabled = enabled
-                                PreferencesManager.setBlockHomeFeedEnabled(context, enabled)
-                            },
-                            enabled = isAccessibilityEnabled
-                        )
-                    }
-
-                    HorizontalDivider()
-                }
+                Switch(
+                    checked = reelsBlockingEnabled,
+                    onCheckedChange = { enabled ->
+                        reelsBlockingEnabled = enabled
+                        PreferencesManager.setReelsBlockingEnabled(context, enabled)
+                    },
+                    enabled = isAccessibilityEnabled
+                )
             }
         }
     }
 }
-
-private fun getString(context: Context, resId: Int): String = context.getString(resId)
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val service = ComponentName(context, WhitelistAccessibilityService::class.java)
@@ -311,16 +117,10 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean {
         context.contentResolver,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
     ) ?: return false
-
-    val colonSplitter = TextUtils.SimpleStringSplitter(':')
-    colonSplitter.setString(enabledServices)
-
-    while (colonSplitter.hasNext()) {
-        val componentName = colonSplitter.next()
-        if (ComponentName.unflattenFromString(componentName) == service) {
-            return true
-        }
+    val tasks = TextUtils.SimpleStringSplitter(':')
+    tasks.setString(enabledServices)
+    while (tasks.hasNext()) {
+        if (ComponentName.unflattenFromString(tasks.next()) == service) return true
     }
-
     return false
 }
