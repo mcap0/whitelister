@@ -52,7 +52,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val FULLSCREEN_RATIO = 0.6f
 
         /** Throttle for Block Feed's press-Home bounce (keeps it cheap, avoids re-press storms). */
-        private const val BLOCK_FEED_THROTTLE_MS = 500L
+        private const val BLOCK_FEED_THROTTLE_MS = 100L
 
         /** The Stories tray sits at the very top of the home feed. When visible, we are at top. */
         private const val BLOCK_FEED_TRAY_TOP = -400
@@ -126,14 +126,19 @@ class WhitelistAccessibilityService : AccessibilityService() {
          * ACTION_SCROLL_BACKWARD (one viewport per step) instead of re-tapping the Home tab, which
          * pull-to-refreshes. Steps repeat until the list reports it is at the top.
          */
-        private const val SNAP_DELAY_MS = 150L
-        private const val SNAP_STEP_MS = 120L
-        private const val SNAP_MAX_STEPS = 25
-        /** While a snap is running (and this long after its last step) its own scroll events are ignored. */
-        private const val SNAP_BUSY_MS = 450L
+        /**
+         * Each step restarts RecyclerView's smooth scroll, whose ease-out curve is fastest at its
+         * start, so short steps keep the list moving at full speed. 120ms steps after a 150ms
+         * delay were slower than a user's own scrolling.
+         */
+        private const val SNAP_STEP_MS = 40L
+        /** Max steps per snap (~3s); every new user scroll while snapping resets the count. */
+        private const val SNAP_MAX_STEPS = 75
+        /** Consecutive steps with no movement before the list is considered stuck. */
+        private const val SNAP_STUCK_STEPS = 3
 
         /** Throttle for Block Explore's scroll handling. */
-        private const val BLOCK_EXPLORE_THROTTLE_MS = 300L
+        private const val BLOCK_EXPLORE_THROTTLE_MS = 100L
 
         private const val SEARCH_TAB_ID = "com.instagram.android:id/search_tab"
         private const val FEED_LIST_ALT_ID = "com.instagram.android:id/swipeable_nav_view_pager_inner_recycler_view"
@@ -478,9 +483,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
      */
     private fun blockFeedOnScroll(src: AccessibilityNodeInfo) {
         val now = System.currentTimeMillis()
+        // Already scrolling back: the user is fighting it, keep going (cheap, no tree scan).
+        if (feedSnapper.isRunning()) {
+            feedSnapper.kick()
+            return
+        }
         if (now - lastBlockFeedAt < BLOCK_FEED_THROTTLE_MS) return
-        // Our own scroll-back emits scroll events; let the running snap finish.
-        if (feedSnapper.isBusy()) return
         // Never hijack scrolls inside the full-screen reel viewer (comments sheet, DM list reels,
         // etc.) -- the clips pager is already handled by reels blocking.
         if (isClipsViewerOpen()) return
@@ -515,10 +523,10 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         lastBlockFeedAt = now
         pendingFeedNode = if (isVerticalList(src)) src else null
-        // Act AFTER the current scroll settles: injecting mid-motion gets merged into the user's
-        // ongoing drag and swallowed. The delay lets IG reach its resting position first.
+        // Act right away: a scroll-back that starts late loses to the user's scrolling. If it
+        // starts mid-drag, the finger wins until release and the next steps take over.
         mainHandler.removeCallbacks(feedSnapRunnable)
-        mainHandler.postDelayed(feedSnapRunnable, BLOCK_FEED_PRESS_DELAY_MS)
+        startFeedSnap()
     }
 
     /** Scrolls the feed back to the top without reloading it (falls back to the Home tap). */
@@ -581,8 +589,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
      */
     private fun blockExploreOnScroll(src: AccessibilityNodeInfo) {
         val now = System.currentTimeMillis()
+        if (exploreSnapper.isRunning()) {
+            exploreSnapper.kick()
+            return
+        }
         if (now - lastBlockExploreAt < BLOCK_EXPLORE_THROTTLE_MS) return
-        if (exploreSnapper.isBusy()) return
         if (!isVerticalList(src) || !canScrollBackward(src)) return
         if (isClipsViewerOpen()) return
         val root = getRootInActiveWindow() ?: return
@@ -593,7 +604,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         lastBlockExploreAt = now
         if (BuildConfig.DEBUG) Log.d(TAG, "BlockExplore: scrolling explore back to top id=${src.viewIdResourceName}")
-        exploreSnapper.start(src, BLOCK_FEED_PRESS_DELAY_MS)
+        exploreSnapper.start(src)
     }
 
     private fun canScrollBackward(node: AccessibilityNodeInfo): Boolean =
@@ -690,7 +701,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 // between open-snaps (a Home <-> surface <-> Home cycle must not double-act).
                 if (now - lastBlockFeedPressAt < BLOCK_FEED_OPEN_MIN_INTERVAL_MS) return
                 if (now - lastBlockFeedAt < BLOCK_FEED_THROTTLE_MS) return
-                if (feedSnapper.isBusy()) return
+                if (feedSnapper.isRunning()) return
                 lastBlockFeedAt = now
                 sawTopSinceBlockPress = true
                 if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: opened mid-feed -> snap to top")
@@ -705,11 +716,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Scrolls one list back to its top with repeated ACTION_SCROLL_BACKWARD steps (one viewport
-     * each). This is a programmatic scroll, so unlike re-tapping the Home tab it never triggers
-     * pull-to-refresh. Stops when the list refuses to scroll further (at top), when [isAtTop]
-     * says so, or after SNAP_MAX_STEPS. [onFailed] runs when the list never moved at all, or
-     * ran out of steps without reaching the top.
+     * Scrolls one list back to its top with rapid ACTION_SCROLL_BACKWARD steps. This is a
+     * programmatic scroll, so unlike re-tapping the Home tab it never triggers pull-to-refresh.
+     * Stops as soon as the list refuses to scroll further (RecyclerView returns false at its
+     * top), or after SNAP_MAX_STEPS. New user scrolls while running call [kick], which keeps it
+     * going. [onFailed] runs when the list never moved at all, or got stuck short of the top.
      */
     private inner class TopSnapper(
         private val label: String,
@@ -718,62 +729,57 @@ class WhitelistAccessibilityService : AccessibilityService() {
     ) {
         private var target: AccessibilityNodeInfo? = null
         private var steps = 0
+        private var moves = 0
         private var stuckSteps = 0
         private var lastSignature: String? = null
-        private var busyUntil = 0L
         private val stepRunnable = Runnable { step() }
 
-        fun isBusy(): Boolean = System.currentTimeMillis() < busyUntil
+        fun isRunning(): Boolean = target != null
 
-        fun start(node: AccessibilityNodeInfo, delayMs: Long = 0L) {
+        fun start(node: AccessibilityNodeInfo) {
             target = node
             steps = 0
+            moves = 0
             stuckSteps = 0
             lastSignature = null
-            busyUntil = System.currentTimeMillis() + delayMs + SNAP_BUSY_MS
             mainHandler.removeCallbacks(stepRunnable)
-            mainHandler.postDelayed(stepRunnable, delayMs)
+            step()
+        }
+
+        /** The user scrolled again while snapping: grant a fresh step budget. */
+        fun kick() {
+            steps = 0
+            stuckSteps = 0
         }
 
         fun cancel() {
             mainHandler.removeCallbacks(stepRunnable)
             target = null
-            busyUntil = 0L
         }
 
         private fun step() {
             val node = target ?: return
-            if (steps > 0 && isAtTop?.invoke() == true) {
-                finish("at top after $steps step(s)")
-                return
-            }
             val moved = node.refresh() && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
             if (!moved) {
-                if (steps == 0 && isAtTop?.invoke() != true) {
+                if (moves == 0 && isAtTop?.invoke() == false) {
                     finish("list refused to scroll")
                     onFailed?.invoke()
                 } else {
-                    finish("reached top after $steps step(s)")
+                    finish("reached top after $moves step(s)")
                 }
                 return
             }
             steps++
-            busyUntil = System.currentTimeMillis() + SNAP_BUSY_MS
+            moves++
             // performAction can report success while the list does not move (IG intercepting the
             // scroll). Compare the laid-out children between steps; if nothing moves for a few
-            // steps, give up early so the fallback runs promptly instead of after ~3s.
+            // steps, give up early so the fallback runs promptly.
             val sig = childSignature(node)
             stuckSteps = if (sig != null && sig == lastSignature) stuckSteps + 1 else 0
             lastSignature = sig
-            if (stuckSteps >= 2) {
+            if (stuckSteps >= SNAP_STUCK_STEPS || steps >= SNAP_MAX_STEPS) {
                 val atTop = isAtTop?.invoke() ?: !canScrollBackward(node)
-                finish("list not moving (atTop=$atTop)")
-                if (!atTop) onFailed?.invoke()
-                return
-            }
-            if (steps >= SNAP_MAX_STEPS) {
-                val atTop = isAtTop?.invoke() ?: !canScrollBackward(node)
-                finish("gave up after $steps steps (atTop=$atTop)")
+                finish("stopped after $moves step(s), stuck=$stuckSteps atTop=$atTop")
                 if (!atTop) onFailed?.invoke()
                 return
             }
