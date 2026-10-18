@@ -22,7 +22,7 @@ android {
 minSdk = 23
         targetSdk = 36
         versionCode = 36
-        versionName = "1.3.0-dev2"
+        versionName = "1.4.0"
         // dev is ahead of main (v1.3.0/vc34). Bump dev above main when
         // feature work starts again.
     }

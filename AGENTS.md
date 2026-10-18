@@ -7,6 +7,8 @@ Android app to reclaim control over social media. Starts with Instagram; more ap
 **Current features (in order):**
 1. Remove reels — blocks scrolling in Instagram reels tab (you can view one reel by tapping, but cannot scroll between them). **WORKING — do not modify.**
 2. Lock Home Feed — keeps the user at the top of the For You feed (Stories only); Favorites scrollable, Reels untouched. **WORKING (stable, v1.1.1).** (Originally specced as "Whitelist feed" — filtering the feed to whitelisted accounts — which was found infeasible via AccessibilityService and superseded by this approach.)
+4. Block Explore (v1.4.0) — on the Search/Explore tab the suggestions grid is scrolled back to the top (TopSnapper); search in use (focused/typed EditText) and profile/hashtag/place pages are skipped. Element ids (`search_tab`, `*profile_header*`) are unverified on device.
+5. Daily free time (v1.4.0) — per surface (Reels/Feed/Explore) the block engages only after N minutes/day (`PreferencesManager.shouldBlock`). A 1s sampler (`usageTick`) credits the foreground surface while IG is the active window. 0 = always block (default).
 3. Block Feed — when active, the Home feed cannot be scrolled: any scroll-down is counteracted by pressing the bottom-nav Home tab, which snaps the feed back to the top instantly (accepts pull-to-refresh). **WORKING (dev, uncommitted when this line was written).**
 
 ## Architecture
@@ -93,6 +95,11 @@ whitelister/
 - **Production build config** — `main`: `versionCode 31`, `versionName 1.1.1`. Release uses R8 minify + resource shrink (`isMinifyEnabled = true`, `proguard-rules.pro`, keep rules for the service/activity already present). All `Log.*` calls in the service are gated behind `BuildConfig.DEBUG` (`buildConfig = true`) so a release build logs nothing — keep new log statements gated the same way.
 - **Settings persistence** — Reels toggle, Lock-Home-Feed toggle, and Block-Feed toggle stored in SharedPreferences via `PreferencesManager` (`KEY_BLOCK_HOME_FEED = "block_home_feed_enabled"`, `KEY_BLOCK_FEED = "block_feed_enabled"`).
 - **Live UI status** — MainActivity re-checks accessibility service status on `ON_RESUME` so returning from Settings shows "Service Active" immediately
+
+## v1.4.0 changes (read first)
+
+- **Reel closes on reopen (fixed).** The blocker stayed armed after the viewer closed: a content sync during the BACK's closing animation re-armed it, and only a feed scroll ever reset it — so a reel opened right after a block (without scrolling in between) inherited the stale state and got BACK'd. Now: (1) clips events and tree arming are ignored for `BACK_VERIFY_DELAY_MS = 600` after a BACK, then `backVerifyRunnable` re-reads the tree (viewer gone → `lastViewerAbsentAt`; still there → swallowed BACK, strict re-arm with `armedAt = 0`); (2) `syncViewerFromTree` now disarms when no fullscreen pager is found and the session is older than `VIEWER_LEAVE_GRACE_MS = 1000` (past the open animation); (3) the resume path no longer zeroes `armedAt` for fresh opens.
+- **Block Feed no longer reloads.** `TopSnapper` scrolls the feed list with `ACTION_SCROLL_BACKWARD` steps until the Stories tray is back; the Home-tab tap is only a fallback when the list refuses or does not move (stuck detection via child bounds). Unverified on device whether IG honours the action on the event's source list.
 
 ## How Reels Blocking Works (v1.2.0+, `dev`)
 
