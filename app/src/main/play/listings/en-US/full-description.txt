@@ -1,0 +1,34 @@
+Tired of scrolling for hours without even realizing it?
+
+Whitelister is an open-source app that gives you back control over Instagram with a few simple switches. Instagram does not become unusable. On the contrary, it becomes what YOU want it to be.
+
+WHAT IT DOES
+• Remove Reels: watch the Reel you opened, not the next one. A Reel in your feed, one a friend sent you, one on a profile: tap it and it opens normally. Try to scroll to the next one, and Whitelister stops you.
+• Block Feed: the Home feed stays at the top, Stories only. Scroll down and you are brought right back.
+• Block Explore: no endless suggestions. Search still works, and so do the profiles you open from it.
+• Daily free time: not ready to quit cold turkey? Give each feature a few free minutes per day (5 to 60). The block kicks in only once today's time is used up, and it resets at midnight.
+
+Every feature can be turned on and off at any time, according to your preferences.
+
+WHY I BUILT IT
+I built this app because I actually needed it. I tried every other application, and none of them could compete with an app that does a few things, but does them well.
+
+The idea came to me while I was watching the meditation and yoga teacher Etai Atula (@thugtai). I thought how great it would be if my feed showed only his videos. Today, making social media do what it should do (letting you see only what you want to see) is practically impossible.
+
+Whitelister is based on a simple idea: we should all regain control over social media. It was created to render the attention traps of social media companies useless, and to help you reclaim your attention, your days, your mental health and your humanity.
+
+PRIVACY FIRST
+• Everything runs on your device.
+• No data is collected, stored or shared. The app does not even have internet access.
+• No ads, no analytics, no account.
+
+HOW IT WORKS
+Whitelister uses Android's Accessibility Service to recognize when you are scrolling Reels, the Home feed or Explore inside Instagram, and to bring you back. It acts only on the Instagram app, and only for the features you turned on. The first time you open the app, you will be asked to enable the service in Android Settings.
+
+COMING SOON
+• Feed whitelisting: let your brain see only the accounts you choose, without suggested content.
+• Support for more apps (YouTube, TikTok…).
+
+Whitelister is open source on my GitHub (github.com/mcap0/whitelister). Feel free to contact me for any question or feedback.
+
+Whitelister is an independent project and is not affiliated with, endorsed by or sponsored by Instagram or Meta.
