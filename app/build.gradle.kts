@@ -21,8 +21,10 @@ android {
         applicationId = "com.whitelister.app"
 minSdk = 23
         targetSdk = 36
-        versionCode = 34
-        versionName = "1.3.0"
+        versionCode = 38
+        versionName = "1.4.2"
+        // dev is ahead of main (v1.3.0/vc34). Bump dev above main when
+        // feature work starts again.
     }
 
     signingConfigs {

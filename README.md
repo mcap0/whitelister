@@ -7,8 +7,14 @@ Android app to reclaim control over social media. Starts with Instagram.
 ### Remove Reels — Working
 Blocks scrolling between Instagram Reels. You can view a single reel by tapping, but horizontal/vertical scrolling between reels is blocked. When a scroll is detected in the Reels tab, the app performs a back action to keep you on the current reel.
 
-### Lock Home Feed — Working
-Keeps you at the top of the Instagram **For You** feed (Stories only) by bouncing any scroll back to the top; the **Favorites** sub-feed stays scrollable and Reels are untouched. (Note: the original "Whitelist Feed" idea — filtering the feed to whitelisted accounts — was deemed infeasible via the AccessibilityService API and was replaced by this approach.)
+### Block Feed — Working
+Keeps the Instagram Home feed at the top (Stories only). Any scroll down is scrolled straight back programmatically, so the feed is **not reloaded** (the old Home-tab tap, which pull-to-refreshes, is only a fallback).
+
+### Block Explore — New in 1.4.0
+Same snap-back on the Search/Explore suggestions grid. Searching and profiles opened from search stay free.
+
+### Daily free time — New in 1.4.0
+Each feature can allow N free minutes per day (5–60). The block engages only once today's free time on that surface is used up; usage resets at midnight. "None" = always blocked (default, same behavior as before).
 
 ## How It Works
 
@@ -23,8 +29,8 @@ Whitelister uses Android's **AccessibilityService API** to intercept Instagram's
 2. Install the APK on your Android device (API 30+ / Android 11+)
 3. Open Whitelister → Accept the consent → Tap "Enable Service"
 4. You'll be taken to Android Settings → Accessibility → Whitelister → Toggle ON
-5. Go back to Whitelister → Toggle "Remove Reels" and/or "Lock Home Feed" ON
-6. Open Instagram — Reels are now blocked and/or the Home feed stays at Stories
+5. Go back to Whitelister → Toggle "Remove Reels", "Block Feed" and/or "Block Explore" ON (optionally pick a daily free time)
+6. Open Instagram
 
 ## Requirements
 

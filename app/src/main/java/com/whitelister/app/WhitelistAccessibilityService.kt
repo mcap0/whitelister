@@ -52,7 +52,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         private const val FULLSCREEN_RATIO = 0.6f
 
         /** Throttle for Block Feed's press-Home bounce (keeps it cheap, avoids re-press storms). */
-        private const val BLOCK_FEED_THROTTLE_MS = 500L
+        private const val BLOCK_FEED_THROTTLE_MS = 100L
 
         /** The Stories tray sits at the very top of the home feed. When visible, we are at top. */
         private const val BLOCK_FEED_TRAY_TOP = -400
@@ -98,6 +98,60 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
         /** Minimum gap between open-evaluation presses: one snap-back per surface appearance. */
         private const val BLOCK_FEED_OPEN_MIN_INTERVAL_MS = 2500L
+
+        /**
+         * After a BACK, re-read the tree this long later: either the viewer is gone (recorded, so
+         * the next open is treated as a fresh open with its settle window) or IG swallowed the
+         * BACK and the viewer is still up (re-armed strictly, so the next swipe blocks again).
+         */
+        private const val BACK_VERIFY_DELAY_MS = 600L
+
+        /**
+         * Once armed this long, a tree read that finds no full-screen viewer means the viewer
+         * really left (the open animation's transient sub-fullscreen bounds are over), so the
+         * session is reset. Without this the blocker stayed armed after the viewer closed, and
+         * the NEXT reel opened without scrolling the feed in between inherited the stale state
+         * and was closed on open.
+         */
+        private const val VIEWER_LEAVE_GRACE_MS = 1000L
+
+        /** Usage meter: how often the foreground surface is sampled, and the max credit per sample. */
+        private const val USAGE_TICK_MS = 1000L
+        private const val USAGE_TICK_MAX_MS = 2000L
+        /** Usage is written to SharedPreferences at most this often (and when IG leaves the screen). */
+        private const val USAGE_FLUSH_MS = 5000L
+
+        /**
+         * Scroll-to-top without reload: the feed/explore list is scrolled back with
+         * ACTION_SCROLL_BACKWARD (one viewport per step) instead of re-tapping the Home tab, which
+         * pull-to-refreshes. Steps repeat until the list reports it is at the top.
+         */
+        /**
+         * Each step restarts RecyclerView's smooth scroll, whose ease-out curve is fastest at its
+         * start, so short steps keep the list moving at full speed. 120ms steps after a 150ms
+         * delay were slower than a user's own scrolling.
+         */
+        private const val SNAP_STEP_MS = 40L
+        /** Max steps per snap (~3s); every new user scroll while snapping resets the count. */
+        private const val SNAP_MAX_STEPS = 75
+        /** Consecutive steps with no movement before the list is considered stuck. */
+        private const val SNAP_STUCK_STEPS = 3
+
+        /**
+         * The user "insists" when a snap has been fighting them this long without reaching the
+         * top, or when this many downward user scrolls arrive while it runs. Then the slow fight
+         * is abandoned for the instant tab tap (Home / Search), accepting its reload.
+         */
+        private const val SNAP_INSIST_MS = 1200L
+        private const val SNAP_INSIST_PUSHES = 3
+
+        private const val SEARCH_TAB_RESNAP_MIN_MS = 1500L
+
+        /** Throttle for Block Explore's scroll handling. */
+        private const val BLOCK_EXPLORE_THROTTLE_MS = 100L
+
+        private const val SEARCH_TAB_ID = "com.instagram.android:id/search_tab"
+        private const val FEED_LIST_ALT_ID = "com.instagram.android:id/swipeable_nav_view_pager_inner_recycler_view"
     }
 
     // --- Reels-blocking state machine (empirical, source-based) ---
@@ -114,6 +168,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
     // When the blocker was last armed (disarmed -> armed). Gates the OPEN_SETTLE_MS absorb;
     // NOT refreshed on re-confirmations, or a long-rendering open would keep the window open.
     private var armedAt = 0L
+    // Last time a tree read found NO full-screen reel viewer. Compared with lastBackAt to tell a
+    // fresh open (viewer seen gone since the last block) from a swallowed BACK (viewer never left).
+    private var lastViewerAbsentAt = 0L
+    private val backVerifyRunnable = Runnable {
+        syncViewerFromTree("back-verify")
+    }
 
     // --- Block Feed state machine ---
     // Last time Block Feed issued a press-Home bounce. Throttled to avoid re-press storms while
@@ -131,6 +191,36 @@ class WhitelistAccessibilityService : AccessibilityService() {
         evaluateBlockFeedOnOpen()
     }
     private var openEvalAttempts = 0
+    // Scrolled list captured from the triggering scroll event, used by the deferred snap.
+    private var pendingFeedNode: AccessibilityNodeInfo? = null
+    private val feedSnapRunnable = Runnable {
+        startFeedSnap()
+    }
+    private val feedSnapper = TopSnapper(
+        label = "BlockFeed",
+        isAtTop = { feedAtTopNow() },
+        onFailed = { fallbackPressHome() },
+        onInsist = { fallbackPressHome() }
+    )
+
+    // --- Block Explore state ---
+    private var lastBlockExploreAt = 0L
+    private var lastSearchTabPressAt = 0L
+    private val exploreSnapper = TopSnapper(
+        label = "BlockExplore",
+        isAtTop = null,
+        onFailed = null,
+        onInsist = { pressSearchTab() }
+    )
+
+    // --- Usage meter (daily free time per surface) ---
+    private var usageTickerRunning = false
+    private var lastUsageTickAt = 0L
+    private var lastUsageFlushAt = 0L
+    private val pendingUsageMs = HashMap<IgSurface, Long>()
+    private val usageTicker = Runnable {
+        usageTick()
+    }
 
     private val dumpReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -164,6 +254,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         if (event.packageName?.toString() != "com.instagram.android") return
+        ensureUsageTicker()
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -220,7 +311,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (rid == CLIPS_PAGER_ID) {
             onClipsPagerScroll(event)
         } else {
-            onNonClipsScroll(rid)
+            onNonClipsScroll(src, rid, scrollDeltaY(event))
         }
     }
 
@@ -232,6 +323,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
         val cur = if (event.toIndex >= 0) event.toIndex else maxOf(event.fromIndex, event.toIndex)
         val now = System.currentTimeMillis()
 
+        if (!clipsActive && lastBackAt > 0 && now - lastBackAt < BACK_VERIFY_DELAY_MS) {
+            // Event storm of the viewer we just closed with BACK. backVerifyRunnable re-arms
+            // strictly if the BACK was swallowed; arming from these events would leave the
+            // blocker armed (with a stale page) after the viewer is gone.
+            return
+        }
         if (!clipsActive) {
             // A stray non-clips scroll (feed/direct/grid inner scrollables) or a raced
             // tree sync can leave the blocker un-armed while the viewer is open. Re-arm
@@ -239,10 +336,13 @@ class WhitelistAccessibilityService : AccessibilityService() {
             // gets a free pass.
             syncViewerFromTree("resume")
             if (clipsActive) {
-                // A resume is a freshly-armed session whose opening emit may have been
-                // missed; do not let THIS event hide inside the open-settle window.
-                armedAt = 0
-                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: re-armed via tree (page=$clipsPage)")
+                // syncViewerFromTree already decided the window: a fresh open (viewer seen gone
+                // since the last block) keeps its open-settle window, because THIS event is most
+                // likely IG's opening reposition -- the content-change sync is throttled, so a
+                // reel opened right after a blocked one is often armed by its first scroll
+                // event. Zeroing armedAt here made that reposition read as a swipe and closed
+                // the reel on open. A swallowed BACK / stray disarm is armed strictly instead.
+                if (BuildConfig.DEBUG) Log.d(TAG, "blocker: re-armed via tree (page=$clipsPage, armedAt=$armedAt)")
                 // Fall through to the baseline logic below.
             } else {
                 // The tree scan could not confirm the viewer (root null / transient
@@ -293,13 +393,14 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 return
             }
             if (cur < 0) return
-            if (PreferencesManager.isReelsBlockingEnabled(this)) {
+            if (PreferencesManager.shouldBlock(this, IgSurface.REELS)) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE (no baseline) ${event.fromIndex}->$cur, issuing BACK")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 lastBackAt = now
                 clipsActive = false
                 clipsPage = cur
                 clipsPageConfirmed = false
+                scheduleBackVerify()
             } else {
                 clipsPage = cur
                 clipsPageConfirmed = false
@@ -330,13 +431,14 @@ class WhitelistAccessibilityService : AccessibilityService() {
         // Any deviation from the baseline is a genuine swipe. Record the pager's surviving
         // position so the next open is armed with a matching baseline -- without this, the
         // Reel-tab reopens with clipsPage one page behind and instant-BACKs on restore.
-        if (PreferencesManager.isReelsBlockingEnabled(this)) {
+        if (PreferencesManager.shouldBlock(this, IgSurface.REELS)) {
             if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE $clipsPage->$cur, issuing BACK")
             performGlobalAction(GLOBAL_ACTION_BACK)
             lastBackAt = now
             clipsActive = false
             clipsPage = cur
             clipsPageConfirmed = false
+            scheduleBackVerify()
         } else {
             if (BuildConfig.DEBUG) Log.d(TAG, "blocker: SWIPE $clipsPage->$cur (blocking disabled)")
             clipsPage = cur
@@ -351,17 +453,26 @@ class WhitelistAccessibilityService : AccessibilityService() {
         lastDisarmCheckAt = now
         val root = getRootInActiveWindow() ?: return true
         try {
-            return isFullscreenClipsPager(root, 0)
+            val open = isFullscreenClipsPager(root, 0)
+            if (!open) lastViewerAbsentAt = now
+            return open
         } finally {
             root.recycle()
         }
     }
 
-    private fun onNonClipsScroll(rid: String?) {
+    /** Vertical scroll delta (API 28+, > 0 = content moved down the list); 0 when unknown. */
+    private fun scrollDeltaY(event: AccessibilityEvent): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) event.scrollDeltaY else 0
+
+    private fun onNonClipsScroll(src: AccessibilityNodeInfo, rid: String?, deltaY: Int) {
         // Block Feed: any non-clips scroll while the home feed can be engaged should send us
         // back to the top. This runs even if reels blocking's clips session is not active.
-        if (PreferencesManager.isBlockFeedEnabled(this)) {
-            blockFeedOnScroll()
+        if (PreferencesManager.shouldBlock(this, IgSurface.FEED)) {
+            blockFeedOnScroll(src, deltaY)
+        }
+        if (PreferencesManager.shouldBlock(this, IgSurface.EXPLORE)) {
+            blockExploreOnScroll(src, deltaY)
         }
         if (!clipsActive) return
         // Do not disarm while the full-screen reel viewer is still present: inner
@@ -375,18 +486,25 @@ class WhitelistAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Block Feed: when the user scrolls the Home feed away from the top, press the bottom-nav
-     * Home tab so the feed snaps back to the top. A re-tap of the already-selected Home tab
-     * triggers a pull-to-refresh (reload) -- the product rule accepts the reload in exchange
-     * for the instant snap-back (much faster than the dispatchGesture scroll-up that replaced).
+     * Block Feed: when the user scrolls the Home feed away from the top, scroll it straight back.
+     *
+     * The feed list itself is scrolled with ACTION_SCROLL_BACKWARD (TopSnapper), which moves it
+     * programmatically: no pull-to-refresh, so the feed is NOT reloaded. Only when the list
+     * refuses the action (IG build without accessibility scrolling) does it fall back to the old
+     * mechanism, re-tapping the bottom-nav Home tab, which snaps to top but also refreshes.
      *
      * The at-top test is the Stories tray: expanded (>10% screen height) it exists only at the
-     * very top of the feed. While the tray is NOT expanded we are scrolled down and may press.
-     * During the reload the tray is hidden, so a re-arm gate (sawTopSinceBlockPress) prevents
-     * re-pressing until the feed is genuinely seen back at top -- that stops the refresh loop.
+     * very top of the feed. While the tray is NOT expanded we are scrolled down and may act.
+     * After a Home-tap fallback the reload hides the tray, so a re-arm gate
+     * (sawTopSinceBlockPress) prevents re-pressing until the feed is seen back at top.
      */
-    private fun blockFeedOnScroll() {
+    private fun blockFeedOnScroll(src: AccessibilityNodeInfo, deltaY: Int) {
         val now = System.currentTimeMillis()
+        // Already scrolling back: the user is fighting it, keep going (cheap, no tree scan).
+        if (feedSnapper.isRunning()) {
+            feedSnapper.kick(deltaY)
+            return
+        }
         if (now - lastBlockFeedAt < BLOCK_FEED_THROTTLE_MS) return
         // Never hijack scrolls inside the full-screen reel viewer (comments sheet, DM list reels,
         // etc.) -- the clips pager is already handled by reels blocking.
@@ -413,20 +531,159 @@ class WhitelistAccessibilityService : AccessibilityService() {
         } finally {
             root.recycle()
         }
-        // Not at top. But if we last pressed Home, IG is still mid pull-to-refresh (tray hidden):
-        // wait for the tray to be seen at top again -- or for the hard settle timeout -- before
-        // pressing again, otherwise every scroll event during the reload re-presses → refresh loop.
+        lastBlockFeedAt = now
+        pendingFeedNode = if (isVerticalList(src)) src else null
+        // Act right away: a scroll-back that starts late loses to the user's scrolling. If it
+        // starts mid-drag, the finger wins until release and the next steps take over.
+        mainHandler.removeCallbacks(feedSnapRunnable)
+        startFeedSnap()
+    }
+
+    /** Scrolls the feed back to the top without reloading it (falls back to the Home tap). */
+    private fun startFeedSnap() {
+        val node = pendingFeedNode ?: findFeedListNode()
+        pendingFeedNode = null
+        if (node == null) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: feed list not found, Home-tap fallback")
+            fallbackPressHome()
+            return
+        }
+        if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: scrolling feed back to top (no reload) id=${node.viewIdResourceName}")
+        feedSnapper.start(node)
+    }
+
+    private fun fallbackPressHome() {
+        val now = System.currentTimeMillis()
+        // If we last pressed Home, IG is still mid pull-to-refresh (tray hidden): wait for the
+        // tray to be seen at top again -- or for the hard settle timeout -- before pressing
+        // again, otherwise every scroll event during the reload re-presses → refresh loop.
+        // (The no-reload scroll-back is NOT gated: it cannot loop.)
         if (!sawTopSinceBlockPress && now - lastBlockFeedPressAt < BLOCK_FEED_BOUNCE_SETTLE_MS) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: refresh-settle guard, skip")
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: refresh-settle guard, skip Home tap")
             return
         }
         lastBlockFeedAt = now
         lastBlockFeedPressAt = now
         sawTopSinceBlockPress = false
-        // Tap AFTER the current scroll settles: injecting mid-motion gets merged into the user's
-        // ongoing drag and swallowed. The delay lets IG reach its resting position first.
         mainHandler.removeCallbacks(pressHomeRunnable)
-        mainHandler.postDelayed(pressHomeRunnable, BLOCK_FEED_PRESS_DELAY_MS)
+        mainHandler.post(pressHomeRunnable)
+    }
+
+    private fun feedAtTopNow(): Boolean {
+        val root = getRootInActiveWindow() ?: return false
+        try {
+            return findStoriesTray(root, 0)
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /** The visible Home feed list (android:id/list or IG's swipeable nav inner recycler). */
+    private fun findFeedListNode(): AccessibilityNodeInfo? {
+        val root = getRootInActiveWindow() ?: return null
+        for (id in listOf(FEED_LIST_ID, FEED_LIST_ALT_ID)) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id) ?: continue
+            val match = nodes.firstOrNull { it.isVisibleToUser && it.isScrollable && isVerticalList(it) }
+            if (match != null) return match
+        }
+        return null
+    }
+
+    /** A tall, wide scrollable: a vertical list or grid (not a horizontal tray/carousel). */
+    private fun isVerticalList(node: AccessibilityNodeInfo): Boolean {
+        if (!node.isScrollable) return false
+        val b = Rect()
+        node.getBoundsInScreen(b)
+        val dm = resources.displayMetrics
+        return b.height() >= dm.heightPixels * 0.4f && b.width() >= dm.widthPixels * 0.8f
+    }
+
+    /**
+     * Block Explore: on the Search/Explore tab the recommendations grid (and the post feed it
+     * opens) cannot be scrolled: any scroll away from the top is scrolled straight back, so only
+     * the first row of suggestions is visible. Searching stays free: while the search field is
+     * in use (focused, or holding a query) the results list scrolls normally, and profiles
+     * opened from search are left alone.
+     */
+    private fun blockExploreOnScroll(src: AccessibilityNodeInfo, deltaY: Int) {
+        val now = System.currentTimeMillis()
+        if (exploreSnapper.isRunning()) {
+            exploreSnapper.kick(deltaY)
+            return
+        }
+        if (now - lastBlockExploreAt < BLOCK_EXPLORE_THROTTLE_MS) return
+        if (!isVerticalList(src) || !canScrollBackward(src)) return
+        if (isClipsViewerOpen()) return
+        val root = getRootInActiveWindow() ?: return
+        try {
+            if (!isExploreSurface(root)) return
+        } finally {
+            root.recycle()
+        }
+        lastBlockExploreAt = now
+        if (BuildConfig.DEBUG) Log.d(TAG, "BlockExplore: scrolling explore back to top id=${src.viewIdResourceName}")
+        exploreSnapper.start(src)
+    }
+
+    private fun canScrollBackward(node: AccessibilityNodeInfo): Boolean =
+        node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD }
+
+    /**
+     * True on the Explore recommendations surface: the Search tab is selected, the search field
+     * is not being used, and the explore grid (not a profile/hashtag/place page) is showing.
+     */
+    private fun isExploreSurface(root: AccessibilityNodeInfo): Boolean {
+        if (!isBottomTabSelected(root, SEARCH_TAB_ID)) return false
+        if (isSearchInUse(root, 0)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockExplore: search in use, skip")
+            return false
+        }
+        if (isProfileLikePage(root, 0)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockExplore: profile/page opened from search, skip")
+            return false
+        }
+        return true
+    }
+
+    private fun isBottomTabSelected(root: AccessibilityNodeInfo, tabId: String): Boolean {
+        val nodes = root.findAccessibilityNodeInfosByViewId(tabId) ?: return false
+        return nodes.any { it.isSelected || it.isChecked }
+    }
+
+    /** The search EditText is focused or holds a typed query (not just its hint). */
+    private fun isSearchInUse(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        if (node.isEditable && node.isVisibleToUser) {
+            if (node.isFocused) return true
+            val hasQuery = !node.text.isNullOrEmpty() &&
+                    !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && node.isShowingHintText)
+            if (hasQuery) return true
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = isSearchInUse(child, depth + 1)
+            child.recycle()
+            if (found) return true
+        }
+        return false
+    }
+
+    /** A profile, hashtag or place page pushed on top of the Search tab. */
+    private fun isProfileLikePage(node: AccessibilityNodeInfo?, depth: Int): Boolean {
+        if (node == null || depth > 25) return false
+        val rid = node.viewIdResourceName
+        if (rid != null && node.isVisibleToUser && (
+                    rid.contains("profile_header") || rid.contains("row_profile_header") ||
+                    rid.contains("hashtag_header") || rid.contains("location_header"))) {
+            return true
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = isProfileLikePage(child, depth + 1)
+            child.recycle()
+            if (found) return true
+        }
+        return false
     }
 
     /**
@@ -434,10 +691,10 @@ class WhitelistAccessibilityService : AccessibilityService() {
      * session's scroll) snap it back to the top -- no scroll event fires for a restored position,
      * so the scroll-driven path alone would leave it mid-feed. Also re-arms the loop-guard state
      * for a fresh session so a stale mid-refresh flag from the last session can't suppress the
-     * first bounce. Never presses while the feed is rendered at top (no reload on a clean open).
+     * first bounce. Never acts while the feed is rendered at top.
      */
     private fun evaluateBlockFeedOnOpen() {
-        if (!PreferencesManager.isBlockFeedEnabled(this)) return
+        if (!PreferencesManager.shouldBlock(this, IgSurface.FEED)) return
         val now = System.currentTimeMillis()
         val root = getRootInActiveWindow() ?: return
         try {
@@ -459,19 +716,127 @@ class WhitelistAccessibilityService : AccessibilityService() {
                     return
                 }
                 // Opened scrolled-down: snap back once, respecting throttle and the min interval
-                // between open-presses (a Home <-> surface <-> Home cycle must not double-press).
+                // between open-snaps (a Home <-> surface <-> Home cycle must not double-act).
                 if (now - lastBlockFeedPressAt < BLOCK_FEED_OPEN_MIN_INTERVAL_MS) return
                 if (now - lastBlockFeedAt < BLOCK_FEED_THROTTLE_MS) return
+                if (feedSnapper.isRunning()) return
                 lastBlockFeedAt = now
-                lastBlockFeedPressAt = now
-                sawTopSinceBlockPress = false
+                sawTopSinceBlockPress = true
                 if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: opened mid-feed -> snap to top")
-                mainHandler.removeCallbacks(pressHomeRunnable)
-                mainHandler.postDelayed(pressHomeRunnable, BLOCK_FEED_PRESS_DELAY_MS)
+                pendingFeedNode = null
+                mainHandler.removeCallbacks(feedSnapRunnable)
+                mainHandler.postDelayed(feedSnapRunnable, BLOCK_FEED_PRESS_DELAY_MS)
             }
             // Not Home (another tab genuinely selected): leave the restored surface alone.
         } finally {
             root.recycle()
+        }
+    }
+
+    /**
+     * Scrolls one list back to its top with rapid ACTION_SCROLL_BACKWARD steps. This is a
+     * programmatic scroll, so unlike re-tapping the Home tab it never triggers pull-to-refresh.
+     * Stops as soon as the list refuses to scroll further (RecyclerView returns false at its
+     * top), or after SNAP_MAX_STEPS. New user scrolls while running call [kick], which keeps it
+     * going. [onFailed] runs when the list never moved at all, or got stuck short of the top.
+     */
+    private inner class TopSnapper(
+        private val label: String,
+        private val isAtTop: (() -> Boolean)?,
+        private val onFailed: (() -> Unit)?,
+        private val onInsist: (() -> Unit)?
+    ) {
+        private var target: AccessibilityNodeInfo? = null
+        private var startedAt = 0L
+        private var pushes = 0
+        private var steps = 0
+        private var moves = 0
+        private var stuckSteps = 0
+        private var lastSignature: String? = null
+        private val stepRunnable = Runnable { step() }
+
+        fun isRunning(): Boolean = target != null
+
+        fun start(node: AccessibilityNodeInfo) {
+            target = node
+            startedAt = System.currentTimeMillis()
+            pushes = 0
+            steps = 0
+            moves = 0
+            stuckSteps = 0
+            lastSignature = null
+            mainHandler.removeCallbacks(stepRunnable)
+            step()
+        }
+
+        /**
+         * A scroll arrived while snapping (ours or the user's): grant a fresh step budget. If the
+         * user is clearly fighting it -- downward scrolls, or a snap that has not reached the
+         * top after SNAP_INSIST_MS -- hand over to [onInsist] (the instant tab tap).
+         */
+        fun kick(deltaY: Int) {
+            steps = 0
+            stuckSteps = 0
+            if (deltaY > 0) pushes++
+            val fighting = System.currentTimeMillis() - startedAt
+            if (onInsist != null && (pushes >= SNAP_INSIST_PUSHES || fighting >= SNAP_INSIST_MS)) {
+                finish("user insists (pushes=$pushes, ${fighting}ms) -> tab tap")
+                mainHandler.removeCallbacks(stepRunnable)
+                onInsist.invoke()
+            }
+        }
+
+        fun cancel() {
+            mainHandler.removeCallbacks(stepRunnable)
+            target = null
+        }
+
+        private fun step() {
+            val node = target ?: return
+            val moved = node.refresh() && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+            if (!moved) {
+                if (moves == 0 && isAtTop?.invoke() == false) {
+                    finish("list refused to scroll")
+                    onFailed?.invoke()
+                } else {
+                    finish("reached top after $moves step(s)")
+                }
+                return
+            }
+            steps++
+            moves++
+            // performAction can report success while the list does not move (IG intercepting the
+            // scroll). Compare the laid-out children between steps; if nothing moves for a few
+            // steps, give up early so the fallback runs promptly.
+            val sig = childSignature(node)
+            stuckSteps = if (sig != null && sig == lastSignature) stuckSteps + 1 else 0
+            lastSignature = sig
+            if (stuckSteps >= SNAP_STUCK_STEPS || steps >= SNAP_MAX_STEPS) {
+                val atTop = isAtTop?.invoke() ?: !canScrollBackward(node)
+                finish("stopped after $moves step(s), stuck=$stuckSteps atTop=$atTop")
+                if (!atTop) onFailed?.invoke()
+                return
+            }
+            mainHandler.postDelayed(stepRunnable, SNAP_STEP_MS)
+        }
+
+        /** Position fingerprint of the list: its first few children's bounds. */
+        private fun childSignature(node: AccessibilityNodeInfo): String? {
+            if (!node.refresh()) return null
+            val sb = StringBuilder()
+            val b = Rect()
+            for (i in 0 until minOf(node.childCount, 3)) {
+                val child = node.getChild(i) ?: continue
+                child.getBoundsInScreen(b)
+                sb.append(b.top).append(',').append(b.bottom).append(';')
+                child.recycle()
+            }
+            return sb.toString()
+        }
+
+        private fun finish(why: String) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "$label: snap done -- $why")
+            target = null
         }
     }
 
@@ -581,6 +946,21 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Block Explore's insist fallback: re-tapping the selected Search tab makes Instagram jump
+     * the Explore grid back to the top instantly.
+     */
+    private fun pressSearchTab() {
+        val now = System.currentTimeMillis()
+        if (now - lastSearchTabPressAt < SEARCH_TAB_RESNAP_MIN_MS) return
+        lastSearchTabPressAt = now
+        lastBlockExploreAt = now
+        val root = getRootInActiveWindow() ?: return
+        val tab = root.findAccessibilityNodeInfosByViewId(SEARCH_TAB_ID)?.firstOrNull()
+        val clicked = tab?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
+        if (BuildConfig.DEBUG) Log.d(TAG, "BlockExplore: pressed Search tab -> jump to top clicked=$clicked")
+    }
+
     /** Finds the bottom-nav Home tab node (com.instagram.android:id/feed_tab). */
     private fun findFeedTab(node: AccessibilityNodeInfo?, depth: Int): AccessibilityNodeInfo? {
         if (node == null || depth > 25) return null
@@ -628,6 +1008,71 @@ class WhitelistAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun scheduleBackVerify() {
+        mainHandler.removeCallbacks(backVerifyRunnable)
+        mainHandler.postDelayed(backVerifyRunnable, BACK_VERIFY_DELAY_MS)
+    }
+
+    // --- Usage meter -------------------------------------------------------------------------
+    // Daily free time ("block only after N minutes") needs to know how long the user spends on
+    // each surface. While Instagram is in the foreground the active window is sampled once per
+    // second and the elapsed time is credited to the surface on screen. The ticker stops by
+    // itself as soon as another app (launcher, lock screen) is in front, and restarts on the
+    // next Instagram event.
+
+    private fun ensureUsageTicker() {
+        if (usageTickerRunning) return
+        usageTickerRunning = true
+        lastUsageTickAt = System.currentTimeMillis()
+        mainHandler.postDelayed(usageTicker, USAGE_TICK_MS)
+    }
+
+    private fun usageTick() {
+        val now = System.currentTimeMillis()
+        val elapsed = (now - lastUsageTickAt).coerceIn(0L, USAGE_TICK_MAX_MS)
+        lastUsageTickAt = now
+        val root = getRootInActiveWindow()
+        if (root != null && root.packageName?.toString() != "com.instagram.android") {
+            root.recycle()
+            usageTickerRunning = false
+            flushUsage()
+            return
+        }
+        if (root != null) {
+            try {
+                val surface = currentSurface(root)
+                if (surface != null) {
+                    pendingUsageMs[surface] = (pendingUsageMs[surface] ?: 0L) + elapsed
+                }
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "usageTick error", e)
+            } finally {
+                root.recycle()
+            }
+        }
+        if (now - lastUsageFlushAt >= USAGE_FLUSH_MS) flushUsage()
+        mainHandler.postDelayed(usageTicker, USAGE_TICK_MS)
+    }
+
+    private fun flushUsage() {
+        lastUsageFlushAt = System.currentTimeMillis()
+        if (pendingUsageMs.isEmpty()) return
+        for ((surface, ms) in pendingUsageMs) {
+            PreferencesManager.addUsedMs(this, surface, ms)
+        }
+        pendingUsageMs.clear()
+    }
+
+    /** Which metered surface is on screen: a full-screen reel, the Home feed or Explore. */
+    private fun currentSurface(root: AccessibilityNodeInfo): IgSurface? {
+        if (isFullscreenClipsPager(root, 0)) return IgSurface.REELS
+        if (isBottomTabSelected(root, SEARCH_TAB_ID)) {
+            return if (!isSearchInUse(root, 0) && !isProfileLikePage(root, 0)) IgSurface.EXPLORE else null
+        }
+        if (isOnHomeTabGivenSelection(root) && isHomeFeedRendered(root)) return IgSurface.FEED
+        return null
+    }
+
     private fun resetClipsSession(reason: String) {
         val wasActive = clipsActive
         clipsActive = false
@@ -663,18 +1108,38 @@ class WhitelistAccessibilityService : AccessibilityService() {
         try {
             val reelTabSelected = isReelTabSelected(root, 0)
             val pagerFullscreen = isFullscreenClipsPager(root, 0)
+            val now = System.currentTimeMillis()
+            if (pagerFullscreen && !clipsActive && lastBackAt > 0 &&
+                now - lastBackAt < BACK_VERIFY_DELAY_MS && reason != "back-verify") {
+                // The viewer we just blocked is still animating out. Arming now would leave the
+                // blocker armed after it disappears; backVerifyRunnable decides once it settles.
+                return
+            }
             if (pagerFullscreen) {
                 val wasEnabled = clipsActive
                 clipsActive = true
                 if (!wasEnabled) {
-                    armedAt = System.currentTimeMillis()
-                    if (!reelTabSelected) {
-                        clipsPage = -1
-                        clipsPageConfirmed = false
+                    if (lastBackAt > 0 && lastViewerAbsentAt < lastBackAt) {
+                        // The viewer never left since our last BACK: IG swallowed it. This is
+                        // the same viewer, still at the page the blocked swipe reached -- keep
+                        // that baseline and grant no settle window, so the next swipe blocks.
+                        armedAt = 0
+                        if (BuildConfig.DEBUG) Log.d(TAG, "blocker: BACK swallowed, re-armed strictly ($reason) page=$clipsPage")
+                    } else {
+                        armedAt = now
+                        if (!reelTabSelected) {
+                            clipsPage = -1
+                            clipsPageConfirmed = false
+                        }
                     }
                 }
                 if (BuildConfig.DEBUG && (!wasEnabled || clipsPage == -1)) {
                     Log.d(TAG, "blocker: viewer armed via tree ($reason) tab=$reelTabSelected page=$clipsPage")
+                }
+            } else {
+                lastViewerAbsentAt = now
+                if (clipsActive && now - armedAt > VIEWER_LEAVE_GRACE_MS) {
+                    resetClipsSession("viewer left ($reason)")
                 }
             }
         } catch (e: Exception) {
@@ -801,6 +1266,12 @@ class WhitelistAccessibilityService : AccessibilityService() {
         super.onDestroy()
         mainHandler.removeCallbacks(pressHomeRunnable)
         mainHandler.removeCallbacks(openFeedEvalRunnable)
+        mainHandler.removeCallbacks(feedSnapRunnable)
+        mainHandler.removeCallbacks(backVerifyRunnable)
+        mainHandler.removeCallbacks(usageTicker)
+        feedSnapper.cancel()
+        exploreSnapper.cancel()
+        flushUsage()
         try {
             unregisterReceiver(dumpReceiver)
         } catch (_: Exception) {
