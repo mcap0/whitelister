@@ -528,6 +528,14 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: at top (Stories tray visible), re-armed")
                 return
             }
+            if (isFeedListAtTop(root)) {
+                // Stories still loading (tray missing/placeholder) but the list itself is at its
+                // top: nothing to undo. Without this the snap "fails" and taps Home -> reload ->
+                // stories load again -> tap again: the infinite reload loop.
+                sawTopSinceBlockPress = true
+                if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: at top (list can't scroll back, tray loading), re-armed")
+                return
+            }
         } finally {
             root.recycle()
         }
@@ -562,6 +570,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: refresh-settle guard, skip Home tap")
             return
         }
+        if (feedAtTopNow()) {
+            sawTopSinceBlockPress = true
+            if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: already at top, skip Home tap")
+            return
+        }
         lastBlockFeedAt = now
         lastBlockFeedPressAt = now
         sawTopSinceBlockPress = false
@@ -572,7 +585,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
     private fun feedAtTopNow(): Boolean {
         val root = getRootInActiveWindow() ?: return false
         try {
-            return findStoriesTray(root, 0)
+            return findStoriesTray(root, 0) || isFeedListAtTop(root)
         } finally {
             root.recycle()
         }
@@ -587,6 +600,29 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (match != null) return match
         }
         return null
+    }
+
+    /**
+     * True when the visible Home feed list is at its very top: RecyclerView only exposes
+     * ACTION_SCROLL_BACKWARD while it can scroll up, so its absence means "at top" even when the
+     * Stories tray is not rendered yet (slow loading, placeholder). An empty, not-yet-scrollable
+     * list also counts as at top. False when no feed list is found (unknown).
+     */
+    private fun isFeedListAtTop(root: AccessibilityNodeInfo): Boolean {
+        val dm = resources.displayMetrics
+        val b = Rect()
+        var found = false
+        for (id in listOf(FEED_LIST_ID, FEED_LIST_ALT_ID)) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id) ?: continue
+            for (n in nodes) {
+                if (!n.isVisibleToUser) continue
+                n.getBoundsInScreen(b)
+                if (b.height() < dm.heightPixels * 0.4f || b.width() < dm.widthPixels * 0.8f) continue
+                found = true
+                if (canScrollBackward(n)) return false
+            }
+        }
+        return found
     }
 
     /** A tall, wide scrollable: a vertical list or grid (not a horizontal tray/carousel). */
@@ -710,7 +746,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
                     }
                     return
                 }
-                if (findStoriesTray(root, 0)) {
+                if (findStoriesTray(root, 0) || isFeedListAtTop(root)) {
                     sawTopSinceBlockPress = true
                     if (BuildConfig.DEBUG) Log.d(TAG, "BlockFeed: opened at top, skip")
                     return
