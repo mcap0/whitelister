@@ -1,35 +1,68 @@
-# Play Store Submission — Accessibility Declaration (v1.1.0)
+# Play Store Submission — Accessibility Declaration (v1.5.0)
 
 Whitelister uses `AccessibilityService`. It is NOT declared as an accessibility tool
-(`isAccessibilityTool` is not set), so the app provides an in-app prominent disclosure
-and affirmative consent (first-launch Consent screen) and must complete the Play Console
-accessibility declaration.
+(`isAccessibilityTool` is not set), so Google Play requires: an in-app prominent disclosure with
+affirmative consent, a privacy policy both in Play Console and inside the app, and the Play
+Console accessibility declaration (with a video). Policy pages:
+https://support.google.com/googleplay/android-developer/answer/10964491 (AccessibilityService API)
+and https://support.google.com/googleplay/android-developer/answer/10144311 (User Data).
 
-## Required in-app disclosure (already implemented)
-- First-launch Consent screen explaining AccessibilityService access, with an explicit
-  "I Accept" button (affirmative consent). Declining exits the app.
-- Always-reachable Info/policy screen (top-bar info icon) repeating the disclosure.
-- Privacy Policy available in-app and at:
-  https://raw.githubusercontent.com/mcap0/whitelister/main/PRIVACY.md
+## In-app disclosure, consent and privacy policy (implemented, v1.5.0)
+- First-launch disclosure screen ("Before you start"): what the service reads (Instagram and
+  Facebook screen content: layout, view ids, visible text such as account names and captions;
+  no other app), why (Remove Reels on Instagram and Facebook, Block Feed, Block Explore, daily
+  usage minutes for the free time), what happens to it (processed in memory on-device, never
+  stored or sent; only settings and today's minutes are saved locally), how to revoke it.
+- Affirmative consent: "I agree" / "Decline". Decline closes the app; Back/Home are not consent;
+  the screen comes back on every launch until accepted. Consent is versioned
+  (`PreferencesManager.CONSENT_VERSION`, currently 2 = Facebook added): bump it whenever what the
+  service reads changes, so everyone is asked again.
+- The accessibility service reads nothing before consent (`onAccessibilityEvent` returns early),
+  even if it was switched on from Android Settings first, and its runtime scope is limited to
+  `com.instagram.android` + `com.facebook.katana` (`setServiceInfo` packageNames).
+- Privacy Policy inside the app: "Read the Privacy Policy" on the disclosure, the info icon on the
+  main screen and the "Privacy policy & permissions" footer link (text in `strings.xml`, same as
+  `PRIVACY.md`). Public URL for Play Console:
+  https://github.com/mcap0/whitelister/blob/main/PRIVACY.md (or the raw URL
+  https://raw.githubusercontent.com/mcap0/whitelister/main/PRIVACY.md).
+- History: the disclosure screen added in v1.0.5 was accidentally deleted by commit dd7f245
+  ("fix: block first scroll in Reels tab"), so v1.3.0 – v1.4.3 shipped WITHOUT it. Restored in
+  v1.5.0 — keep it when rewriting `MainActivity`.
 
 ## Accessibility services declaration — answers to enter in Play Console
+Resubmit the declaration with every release that changes how the API is used (v1.5.0 adds
+Facebook) — "If you change how your app uses this API, you must submit the form again".
 1. Why does your app need to use the Accessibility Services API?
    - Select: **App functionality**
-2. Describe one core feature that requires the AccessibilityService API:
-   - "Whitelister uses the AccessibilityService to read Instagram's on-screen UI for two
-     user-controlled purposes: (1) detect when the user is viewing Reels and prevent
-     scrolling between them, and (2) detect when the user has scrolled the Home feed
-     below the Stories and bounce the feed back to the top. All processing is on-device;
-     no data is collected."
-3. Data collected via the API:
-   - **None.** The view hierarchy/text is processed in memory on-device and is never
-    stored, logged, or transmitted. The app has no INTERNET permission, no analytics,
-    and no ads. Data Safety section: "No data collected."
+2. Does your app collect or share personal or sensitive data through accessibility capabilities?
+   - **No.** The screen content is processed in memory on-device and is never stored, logged or
+     transmitted. The app has no INTERNET permission, no analytics and no ads. Data safety
+     section: "No data collected", "No data shared".
+3. Describe the core feature that requires the AccessibilityService API:
+   - "Whitelister is a digital-wellbeing tool. At the user's request it reads the on-screen UI of
+     Instagram and Facebook (only those two apps) to recognise endless-scroll surfaces and apply
+     fixed, user-selected rules: Remove Reels (Instagram and Facebook) — when the user swipes from
+     the Reel they opened to another one, the app performs a Back action; Block Feed and Block
+     Explore (Instagram) — when the Home feed or Explore grid is scrolled, the app scrolls it back
+     to the top (or taps the Home/Search tab). An optional daily free time lets the user allow N
+     minutes per day before a block starts. All processing is on-device; no data is collected."
+   - These are deterministic, rule-based actions ("if the user swipes to another Reel, go back"),
+     which the policy explicitly allows; nothing is decided autonomously.
+4. Video (required): a link (e.g. unlisted YouTube) showing, in order —
+   1. the app being opened on a device (fresh install or cleared storage);
+   2. the disclosure screen with its full text visible (scroll slowly);
+   3. the consent path: "I agree", then "Enable", then switching Whitelister on in Android
+      Settings > Accessibility;
+   4. the non-consent path: "Decline" closes the app, reopening it shows the disclosure again;
+   5. a core feature: e.g. open a Reel in Instagram or Facebook, swipe to the next one, Back is
+      performed (add captions, the UI alone does not explain it).
 
 ## Notes / residual risk
 - Google's 2026 policy tightening favors apps whose core purpose is serving a disability.
   Whitelister is a digital-wellbeing tool. The above disclosure + zero-data posture is the
   required and recommended compliance baseline; approval is not guaranteed.
+- Store listing: Instagram and Facebook are named only descriptively ("works on"), never in the
+  title or icon, with the non-affiliation disclaimer (Instagram, Facebook, Meta) at the end.
 - Pricing: $0.99. License: AGPL-3.0 + non-commercial (derivatives must stay open and
   non-commercial; only the copyright holder may sell).
 ## Production access application (after the 14-day closed test)
@@ -57,14 +90,14 @@ filled in / checked with real numbers before submitting. Do not invent tester da
 > of an all-or-nothing block. [add/remove points based on what testers actually said]
 
 **4. Who is the intended audience of your app?**
-> Adults who use Instagram and want to keep using it for what matters to them (messages,
+> Adults who use Instagram or Facebook and want to keep using them for what matters to them (messages,
 > friends, the accounts they care about) without being pulled into endless Reels and
 > suggested content. People who struggle with compulsive scrolling and want a simple,
 > private digital-wellbeing tool.
 
 **5. Describe how your app provides value to users.**
-> Whitelister removes the endless-scroll mechanics from Instagram without making it
-> unusable. You can still watch the Reel you opened, but not swipe to the next one; the
+> Whitelister removes the endless-scroll mechanics from Instagram and Facebook without making
+> them unusable. You can still watch the Reel you opened, but not swipe to the next one; the
 > Home feed stays at the Stories; Explore suggestions are blocked while search keeps
 > working. A daily free-time option lets users decide how many minutes per day they allow
 > themselves. Everything runs on-device, with no internet permission, no data collection,
@@ -79,6 +112,8 @@ filled in / checked with real numbers before submitting. Do not invent tester da
 > became faster than the user's scroll, and if the user insists it falls back to tapping
 > Home/Search; added Block Explore; added a per-feature daily free time (5–60 minutes,
 > resets at midnight); and a cleaner interface with usage progress shown for each feature.
+> Version 1.5.0 extended Remove Reels to Facebook [say whether testers asked for it — confirm]
+> and restored the first-launch accessibility disclosure and in-app privacy policy.
 
 **8. How did you decide that your app is ready for production?**
 > The core features worked reliably for testers in daily use across every Reel surface

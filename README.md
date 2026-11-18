@@ -16,6 +16,9 @@ Same snap-back on the Search/Explore suggestions grid. Searching and profiles op
 ### Daily free time — New in 1.4.0
 Each feature can allow N free minutes per day (5–60). The block engages only once today's free time on that surface is used up; usage resets at midnight. "None" = always blocked (default, same behavior as before).
 
+### Facebook: Remove Reels — New in 1.5.0
+The same rule on Facebook: watch the reel you opened, the first swipe to another one is undone with a back action. Works on the Reels tab and in the full-screen viewer that opens reels and videos from the feed, profiles and search. Has its own switch and daily free time.
+
 ## How It Works
 
 Whitelister uses Android's **AccessibilityService API** to intercept Instagram's UI events and modify behavior at runtime. No root required.
@@ -35,14 +38,15 @@ Whitelister uses Android's **AccessibilityService API** to intercept Instagram's
 ## Requirements
 
 - Android 11 (API 30) or higher
-- Instagram app installed
+- Instagram and/or Facebook app installed
 
 ## Privacy
 
 - No data is collected or transmitted
 - No internet permission required
 - All processing happens on-device
-- The accessibility service only monitors Instagram (`com.instagram.android`)
+- The accessibility service only monitors Instagram (`com.instagram.android`) and Facebook (`com.facebook.katana`), and does nothing until you accept the in-app disclosure
+- Full privacy policy: [PRIVACY.md](PRIVACY.md) (also inside the app)
 
 ## Developing
 

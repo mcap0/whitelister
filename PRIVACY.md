@@ -1,23 +1,63 @@
 # Whitelister Privacy Policy
 
-Whitelister is an Android app that helps you reduce time spent on Instagram Reels by using Android's AccessibilityService.
+Last updated: 18 November 2026
 
-## What data the AccessibilityService accesses
-To function, Whitelister's AccessibilityService reads the on-screen user interface of Instagram (`com.instagram.android`), including the view hierarchy, view identifiers, and visible text. This access is used for two purposes only:
+Whitelister is an open-source Android app that helps you spend less time on Instagram and
+Facebook by blocking the endless-scroll features you choose to block. This policy explains what
+data the app accesses and what it does with it. The same policy is available inside the app
+(info icon on the main screen, or "Read the Privacy Policy" on the first-launch disclosure).
 
-1. Detect when you are viewing Reels, so it can prevent scrolling between them.
-2. Detect when you have scrolled the Home feed below the Stories, so it can bounce the feed back to the top.
+## What data the app accesses
+Whitelister uses Android's AccessibilityService API. While Instagram (`com.instagram.android`) or
+Facebook (`com.facebook.katana`) is on screen, the service reads that app's on-screen user
+interface: the view hierarchy, view identifiers, scroll positions and visible text such as
+account names and captions. The service is limited to these two apps and does not read the
+content of any other app; it only checks which app is in the foreground, to know when Instagram
+or Facebook is no longer on screen.
+
+The service does nothing until you accept the in-app disclosure shown on first launch.
 
 ## How the data is used
-All processing happens locally on your device, in memory, at the moment the screen is shown. Whitelister does not store, log, or transmit any of this information.
+Only to provide the features you turn on:
+
+- **Remove Reels** (Instagram and Facebook): recognise that you are watching a Reel and perform a
+  back action when you swipe to another one.
+- **Block Feed** (Instagram): recognise that the Home feed was scrolled below the Stories and
+  scroll it back to the top, or tap the Home tab.
+- **Block Explore** (Instagram): recognise that the Explore grid was scrolled and scroll it back
+  to the top, or tap the Search tab.
+- **Daily free time**: count the minutes you spend on each of these screens each day, so a block
+  starts only after the free minutes you chose.
+
+The screen content is processed in memory, on your device, at the moment it is shown. It is never
+recorded, stored or transmitted.
+
+## Data stored on your device
+Only your feature settings (on/off and daily free minutes), whether you accepted the in-app
+accessibility disclosure, and, for each blockable screen, the minutes used today. These values
+stay in the app's private storage on your device and the minutes are replaced every day. If
+Android backup is turned on, Android may include these settings in your device backup, which is
+managed by Google under your backup settings, not by the developer.
 
 ## Data collection and sharing
-Whitelister collects no personal data. It does not use the internet, contains no analytics SDKs, and displays no advertisements. No data is shared with the developer or any third party.
+Whitelister collects no personal data and shares nothing with the developer or any third party.
+It has no internet permission, no analytics or crash-reporting SDKs, no ads and no account.
+
+## Retention and deletion
+No data leaves your device, so the developer holds nothing to retain or delete. You can delete
+everything the app stored at any time by clearing its storage (Android Settings > Apps >
+Whitelister > Storage) or by uninstalling it.
 
 ## Your controls
-You can disable the AccessibilityService at any time in Android Settings > Accessibility. Uninstalling the app removes all local preferences.
+You can turn every feature off in the app and turn the accessibility service off at any time in
+Android Settings > Accessibility > Whitelister.
+
+## Changes
+Updates to this policy are published at this address with a new date. If the app starts accessing
+data in a new way, you will be asked to accept the in-app disclosure again.
 
 ## Contact
-For questions, contact the developer via the project repository.
+For questions about this policy, open an issue at https://github.com/mcap0/whitelister/issues.
 
-Last updated: 2026-08-28
+Whitelister is an independent project and is not affiliated with, endorsed by or sponsored by
+Instagram, Facebook or Meta.
