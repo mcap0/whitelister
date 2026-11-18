@@ -13,6 +13,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.content.ContextCompat
 
 class WhitelistAccessibilityService : AccessibilityService() {
 
@@ -213,6 +214,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
         onInsist = { pressSearchTab() }
     )
 
+    // --- Facebook ---
+    private val facebook = FacebookReelsBlocker(this)
+
     // --- Usage meter (daily free time per surface) ---
     private var usageTickerRunning = false
     private var lastUsageTickAt = 0L
@@ -227,6 +231,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
             if (intent.action == ACTION_DUMP) {
                 lastTreeDump = 0L
                 dumpTree("ADB")
+                facebook.dump("ADB")
             }
         }
     }
@@ -238,22 +243,39 @@ class WhitelistAccessibilityService : AccessibilityService() {
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                 AccessibilityEvent.TYPE_VIEW_SCROLLED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        // Same scope as accessibility_service_config.xml (a new AccessibilityServiceInfo would
+        // otherwise drop it and deliver every app's events): the disclosure and privacy policy
+        // promise that only Instagram and Facebook are read.
+        info.packageNames = arrayOf("com.instagram.android", FacebookReelsBlocker.PACKAGE)
         info.notificationTimeout = 100
         info.flags = info.flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         setServiceInfo(info)
-        val filter = IntentFilter(ACTION_DUMP)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(dumpReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(dumpReceiver, filter)
+        // Tree dumps on `adb shell am broadcast -a com.whitelister.app.DUMP` are a debugging aid:
+        // the receiver must be exported to be reachable from adb, so release builds (where the
+        // dumps are no-ops anyway) do not register it at all.
+        if (BuildConfig.DEBUG) {
+            ContextCompat.registerReceiver(
+                this, dumpReceiver, IntentFilter(ACTION_DUMP), ContextCompat.RECEIVER_EXPORTED
+            )
+            Log.d(TAG, "Service connected")
         }
-        if (BuildConfig.DEBUG) Log.d(TAG, "Service connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.packageName?.toString() != "com.instagram.android") return
+        // Google Play: no screen content is read before the user accepted the in-app
+        // disclosure, even if the service was switched on from Android Settings first.
+        if (!PreferencesManager.hasConsent(this)) return
+        val pkg = event.packageName?.toString()
+        if (pkg == FacebookReelsBlocker.PACKAGE) {
+            // Facebook is only metered (and handled at all) while its feature is on, so users who
+            // only use the Instagram features pay nothing while Facebook is open.
+            if (PreferencesManager.isEnabled(this, IgSurface.FB_REELS)) ensureUsageTicker()
+            facebook.onEvent(event)
+            return
+        }
+        if (pkg != "com.instagram.android") return
         ensureUsageTicker()
 
         when (event.eventType) {
@@ -1051,10 +1073,10 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     // --- Usage meter -------------------------------------------------------------------------
     // Daily free time ("block only after N minutes") needs to know how long the user spends on
-    // each surface. While Instagram is in the foreground the active window is sampled once per
-    // second and the elapsed time is credited to the surface on screen. The ticker stops by
-    // itself as soon as another app (launcher, lock screen) is in front, and restarts on the
-    // next Instagram event.
+    // each surface. While Instagram (or Facebook) is in the foreground the active window is
+    // sampled once per second and the elapsed time is credited to the surface on screen. The
+    // ticker stops by itself as soon as another app (launcher, lock screen) is in front, and
+    // restarts on the next Instagram/Facebook event.
 
     private fun ensureUsageTicker() {
         if (usageTickerRunning) return
@@ -1068,7 +1090,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
         val elapsed = (now - lastUsageTickAt).coerceIn(0L, USAGE_TICK_MAX_MS)
         lastUsageTickAt = now
         val root = getRootInActiveWindow()
-        if (root != null && root.packageName?.toString() != "com.instagram.android") {
+        val pkg = root?.packageName?.toString()
+        val metered = pkg == "com.instagram.android" ||
+                (pkg == FacebookReelsBlocker.PACKAGE && PreferencesManager.isEnabled(this, IgSurface.FB_REELS))
+        if (root != null && !metered) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "usage: ticker stopped, foreground=$pkg")
             root.recycle()
             usageTickerRunning = false
             flushUsage()
@@ -1076,7 +1102,11 @@ class WhitelistAccessibilityService : AccessibilityService() {
         }
         if (root != null) {
             try {
-                val surface = currentSurface(root)
+                val surface = if (pkg == FacebookReelsBlocker.PACKAGE) {
+                    facebook.currentSurface(root)
+                } else {
+                    currentSurface(root)
+                }
                 if (surface != null) {
                     pendingUsageMs[surface] = (pendingUsageMs[surface] ?: 0L) + elapsed
                 }

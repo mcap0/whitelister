@@ -4,11 +4,15 @@ import android.content.Context
 import android.content.SharedPreferences
 import java.util.Calendar
 
-/** The Instagram surfaces a feature can block and whose daily usage is metered. */
+/**
+ * The surfaces a feature can block and whose daily usage is metered: Instagram's (REELS, FEED,
+ * EXPLORE) and Facebook's (FB_REELS).
+ */
 enum class IgSurface(val key: String) {
     REELS("reels"),
     FEED("feed"),
-    EXPLORE("explore")
+    EXPLORE("explore"),
+    FB_REELS("fb_reels")
 }
 
 object PreferencesManager {
@@ -16,6 +20,17 @@ object PreferencesManager {
     private const val KEY_REELS_BLOCKING = "reels_blocking_enabled"
     private const val KEY_BLOCK_FEED = "block_feed_enabled"
     private const val KEY_BLOCK_EXPLORE = "block_explore_enabled"
+    private const val KEY_FB_REELS_BLOCKING = "fb_reels_blocking_enabled"
+
+    /**
+     * Version of the in-app accessibility disclosure the user accepted (0 = never). Google Play
+     * requires affirmative consent before the service reads any screen content, and the consent
+     * must cover what is actually read: bump [CONSENT_VERSION] whenever the disclosure changes
+     * materially so everyone is asked again. v1 (1.0.5, key "consent_accepted") covered Instagram
+     * only; v2 (1.5.0) adds Facebook, Block Feed/Explore and the daily usage meter.
+     */
+    private const val KEY_CONSENT_VERSION = "consent_version"
+    private const val CONSENT_VERSION = 2
 
     /** Daily free minutes before a surface's block engages: "<surface>_free_minutes". */
     private const val SUFFIX_FREE_MINUTES = "_free_minutes"
@@ -50,10 +65,26 @@ object PreferencesManager {
         prefs(context).edit().putBoolean(KEY_BLOCK_EXPLORE, enabled).apply()
     }
 
+    /** True once the user accepted the current accessibility disclosure. */
+    fun hasConsent(context: Context): Boolean =
+        prefs(context).getInt(KEY_CONSENT_VERSION, 0) >= CONSENT_VERSION
+
+    fun setConsentGiven(context: Context) {
+        prefs(context).edit().putInt(KEY_CONSENT_VERSION, CONSENT_VERSION).apply()
+    }
+
+    fun isFbReelsBlockingEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_FB_REELS_BLOCKING, false)
+
+    fun setFbReelsBlockingEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_FB_REELS_BLOCKING, enabled).apply()
+    }
+
     fun isEnabled(context: Context, surface: IgSurface): Boolean = when (surface) {
         IgSurface.REELS -> isReelsBlockingEnabled(context)
         IgSurface.FEED -> isBlockFeedEnabled(context)
         IgSurface.EXPLORE -> isBlockExploreEnabled(context)
+        IgSurface.FB_REELS -> isFbReelsBlockingEnabled(context)
     }
 
     fun getFreeMinutes(context: Context, surface: IgSurface): Int =

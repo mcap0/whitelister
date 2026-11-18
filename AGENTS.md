@@ -10,6 +10,7 @@ Android app to reclaim control over social media. Starts with Instagram; more ap
 4. Block Explore (v1.4.0) — on the Search/Explore tab the suggestions grid is scrolled back to the top (TopSnapper); search in use (focused/typed EditText) and profile/hashtag/place pages are skipped. Element ids (`search_tab`, `*profile_header*`) are unverified on device.
 5. Daily free time (v1.4.0) — per surface (Reels/Feed/Explore) the block engages only after N minutes/day (`PreferencesManager.shouldBlock`). A 1s sampler (`usageTick`) credits the foreground surface while IG is the active window. 0 = always block (default).
 3. Block Feed — when active, the Home feed cannot be scrolled: any scroll-down is counteracted by pressing the bottom-nav Home tab, which snaps the feed back to the top instantly (accepts pull-to-refresh). **WORKING (dev, uncommitted when this line was written).**
+6. **Facebook — Remove Reels (v1.5.0)** — same rule as Instagram's feature 1 on Facebook (`com.facebook.katana`): a reel can be watched, the first swipe to another reel issues BACK. Covers the Reels tab and the immersive viewer (reels/videos opened from the feed, profiles, search…). Own toggle + daily free time (`IgSurface.FB_REELS`). Lives in `FacebookReelsBlocker.kt`; see "Facebook Remove Reels — How It Works". **WORKING on device (FB 588.0.0.42.55, Pixel 9a, Android 16).**
 
 ## Architecture
 
@@ -43,6 +44,20 @@ export ANDROID_HOME=/opt/android-sdk
 ./gradlew clean
 ```
 
+## Play Store Compliance (read before touching MainActivity or the service)
+
+Whitelister is NOT an accessibility tool (`isAccessibilityTool` unset), so Google Play requires all of the following — breaking any of them can get the app suspended. `PLAY_STORE.md` has the Play Console answers and the declaration-video checklist.
+
+- **Prominent disclosure + consent (`MainActivity.AppRoot` / `ConsentScreen`).** Shown on launch until accepted, before the main screen and before the "Enable" button that opens Accessibility settings. It must say what is read (Instagram/Facebook screen content), why (each feature + daily usage minutes), that nothing is stored/sent, and how to revoke. "I agree" is the only consent; Decline closes the app, Back/Home never count. **Commit `dd7f245` deleted this screen by accident and v1.3.0–v1.4.3 shipped without it — never drop it when rewriting the UI.**
+- **Consent is versioned** (`PreferencesManager.CONSENT_VERSION`, key `consent_version`; 2 = Facebook added). Bump it whenever the service starts reading something new (a new app, new data) and update the disclosure text — everyone is asked again.
+- **The service reads nothing before consent:** `onAccessibilityEvent` returns first thing when `hasConsent` is false (covers users who switch the service on from Android Settings without opening the app).
+- **Scope:** `onServiceConnected` sets `packageNames = [com.instagram.android, com.facebook.katana]` (a fresh `AccessibilityServiceInfo` otherwise drops the XML's list and delivers every app's events). Adding an app = update both lists, the disclosure, the policy, `CONSENT_VERSION` and the Play declaration.
+- **Privacy policy in two places:** `PRIVACY.md` (public URL for Play Console, served from `main`) and `R.string.privacy_policy_text` (in-app: info icon, footer link, link on the disclosure). Keep them identical in substance and bump "Last updated".
+- **Play Console declaration** must be resubmitted (with a new video) whenever the API usage changes — e.g. v1.5.0 added Facebook.
+- **Store listing** (`app/src/main/play/listings/en-US/`): Instagram/Facebook named only descriptively, never in title/icon; keep the non-affiliation disclaimer. Limits: title 30, short 80, full 4000, release notes 500 chars.
+- **No data leaves the device:** no INTERNET permission (check the merged manifest after adding dependencies), no analytics/crash SDKs; only settings + today's minutes per surface are stored locally. Data safety = "No data collected / shared".
+- **Debug aids stay out of release:** the exported `DUMP` receiver is registered only when `BuildConfig.DEBUG`, and all `Log.*` calls are gated.
+
 ## Key Gotchas
 
 - **AccessibilityService must be manually enabled** by the user in Android Settings > Accessibility. The app cannot enable itself.
@@ -61,6 +76,7 @@ whitelister/
 │   │   ├── java/com/whitelister/app/
 │   │   │   ├── MainActivity.kt                    # Compose UI for settings
 │   │   │   ├── WhitelistAccessibilityService.kt   # Core service — reels blocking + Lock Home Feed (both working)
+│   │   │   ├── FacebookReelsBlocker.kt            # Facebook Remove Reels (routed from the service)
 │   │   │   ├── PreferencesManager.kt              # SharedPreferences wrapper
 │   │   │   └── ui/theme/
 │   │   │       ├── Color.kt
@@ -151,6 +167,31 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - `BlockFeed: clips viewer open, skip` — reel surface guard.
 - `BlockFeed: Home button not found` — `feed_tab` node missing from the tree.
 
+## Facebook Remove Reels — How It Works (v1.5.0)
+
+**Goal:** identical to Instagram's Remove Reels — watch the reel you opened, the first swipe to another reel issues `GLOBAL_ACTION_BACK` (Reels tab → back to Home; immersive viewer → closed). Implemented in `FacebookReelsBlocker`; the service routes every `com.facebook.katana` event to it **before** the Instagram filter, so the Instagram code paths are untouched. When the FB toggle is off the blocker returns immediately and Facebook is not metered (zero work).
+
+**Why the Instagram approach can't be reused (verified on device, FB 588.0.0.42.55):**
+- Facebook strips resource names: every id reads `com.facebook.katana:id/(name removed)`; only the Home feed keeps `android:id/list`.
+- List items carry no `CollectionItemInfo` (`rowIndex` is null) and content descriptions are localized ("Reel", "Commenti: 48"…), so neither ids, positions nor strings identify the reel pager.
+- The first scroll event when the Reels tab opens has `fromIndex = toIndex = -1`.
+- While a swipe is in progress the incoming reel's content is NOT in the accessibility tree yet (empty item), and photo reels have no full-size "Reel" button at all.
+- `uiautomator dump` fails while a reel plays ("could not get idle state") — use the service dump below.
+
+**Recognising the pager (language-independent):** a visible `androidx.recyclerview.widget.RecyclerView`, ≥ 60% of the screen and ≥ 90% of its width, not `android:id/list`, whose visible item fills ≥ 85% of it AND contains the reel **action rail**: ≥ 3 small clickables in the right 15% of the screen, stacked over ≥ 8% of the screen height (like / comment / share / save / more at x≈954 of 1080). Ordinary feeds have a horizontal action row, comment sheets and notification rows have at most one right-edge button per item, so they never match. Because the incoming reel is empty mid-swipe, the pager is recognised **at rest** — a throttled tree scan (500ms) on `TYPE_WINDOW_CONTENT_CHANGED` (FB emits ~40/s while a reel plays) and on every `TYPE_WINDOW_STATE_CHANGED` (`ImmersiveActivity` is recognised within ~15ms of opening) — and remembered by node identity (`AccessibilityNodeInfo.equals` = window id + view id; last 4 kept). A pager not yet recognised can still be recognised on the fly from the outgoing reel.
+
+**Swipe detection (no ids, no positions):** FB scroll events carry the visible range: at rest a pager shows one reel (`fromIndex == toIndex`), or a 1px header row (index 0) above the first reel (`0..1`). So:
+1. `from != to` with `|scrollDeltaY| >= 10` (two reels on screen and moving) → swipe → BACK. Catches forward AND backward swipes on the first event (`1..2 dy=859`, `2..3 dy=-912`). Layout passes report `dy = 0` (the immersive open emits `0..1 dy=0`, taken as the baseline).
+2. `from == to` (settled): landing on a reel other than the baseline with `dy != 0` → BACK (safety net when every intermediate event was missed). `dy == 0` settles (data reloads that renumber the list) only re-baseline.
+3. After a BACK: 1.5s cooldown (the closing viewer / sliding tab keeps emitting scrolls) and the baseline is reset — the Reels-tab pager keeps snapping to the next reel while hidden, and that reel must be taken as the new baseline on reopen, not as another swipe (Instagram's "instant BACK on reopen" bug).
+4. Free time not used up → nothing is blocked, the baseline keeps tracking (`SWIPE (...), free time left, not blocking`).
+
+Auto-advance (FB plays the next reel when one ends, "Prossimo video") is a page change too and is blocked — stricter than Instagram, consistent with "not the next one".
+
+**Validated on device (Pixel 9a):** Reels tab first swipe blocked (×4, incl. after reopening with the pager moved on — no false BACK while idle); immersive viewer from the feed's Reels carousel blocked, also when flicked 0.5s after opening; backward swipe blocked; swipe-down on the first reel and the comment sheet (open + scroll) never trigger; photo viewer, Home feed and carousel scrolls ignored; free-time path allows swipes; Instagram Reels blocking unchanged (`SWIPE 0->1, issuing BACK`). Stories were not tested (opening friends' stories notifies them) — they navigate horizontally (`dy = 0`) and have no right rail.
+
+**How to debug:** `adb logcat -s WhitelistFB` (debug builds): `reel pager recognised (window|content|scroll)`, `reel scroll from=.. to=.. dy=.. baseline=..`, `SWIPE (swipe a..b dy=..) -> BACK`, `SWIPE (settled on reel N, was M) -> BACK`. `adb shell am broadcast -a com.whitelister.app.DUMP` also dumps the full Facebook tree (all nodes, `H` = not visible) under the same tag.
+
 ## Lock Home Feed — How It Works (Working, v1.1.1)
 
 **Goal:** lock the For You feed so the user stays at the top (Stories only). Favorites sub-feed must remain scrollable; Reels untouched. **Do not touch the Reels-blocking code.**
@@ -199,6 +240,7 @@ This is the proven pattern from open source projects (Shorts-Blocker, AntiScroll
 - **Versioning**: `dev` uses the next minor (`1.1.x`) and a `versionCode` kept **higher** than `main` so a dev APK can overwrite the production app when sideloaded for testing (option A). After merging `dev → main`, bump `main`'s `versionCode`/`versionName` and cut a stable release.
 - New features start at `1.2.1` on `dev` (`v1.2.0` is the current build on `main`).
 - Build: `./gradlew assembleDebug` (set `JAVA_HOME`/`ANDROID_HOME` first). For Play Store a signed AAB is required (`bundleRelease`).
+- **v1.5.0 (Nov 2026, versionCode 40):** Facebook Remove Reels + Play compliance restored (in-app disclosure/consent, in-app privacy policy, service gated on consent, runtime scope limited to Instagram + Facebook, debug-only dump receiver). See "Play Store Compliance" below.
 - **Current state:** `main` is at **v1.2.0** (versionCode 33) — target Android 16 (API 36), minSdk Android 6.0 (API 23), AGP 8.9.2 (Play requires API 36 target to keep publishing from 31 Aug 2026). Includes the in-app browser guard from v1.1.2. Production still needs the Play closed-test run (≥12 testers × 14 days). `dev` is **aligned with main at v1.2.0** (versionCode 33); when feature work starts on `dev` again, bump it above `main` (e.g. versionName `1.2.1-dev1`, versionCode 34).
 
 ## Publishing a Dev Build (release + APK)

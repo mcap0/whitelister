@@ -1,5 +1,6 @@
 package com.whitelister.app
 
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -7,6 +8,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -19,13 +21,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -43,15 +49,133 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen()
+                    AppRoot()
                 }
             }
         }
     }
 }
 
+/**
+ * Google Play requires a prominent in-app disclosure and affirmative consent before an app that
+ * is not an accessibility tool uses the AccessibilityService API, plus an in-app privacy policy.
+ * The disclosure is shown until accepted (the service reads nothing before that, see
+ * WhitelistAccessibilityService.onAccessibilityEvent); Decline, Back or Home never count as
+ * consent and the screen comes back on the next launch. The policy stays reachable from the main
+ * screen (info icon and footer link).
+ */
 @Composable
-fun MainScreen() {
+fun AppRoot() {
+    val context = LocalContext.current
+    var consented by remember { mutableStateOf(PreferencesManager.hasConsent(context)) }
+    var showPolicy by rememberSaveable { mutableStateOf(false) }
+    when {
+        showPolicy -> PolicyScreen(onClose = { showPolicy = false })
+        !consented -> ConsentScreen(
+            onAccept = {
+                PreferencesManager.setConsentGiven(context)
+                consented = true
+            },
+            onDecline = { (context as? Activity)?.finish() },
+            onViewPolicy = { showPolicy = true }
+        )
+        else -> MainScreen(onOpenPolicy = { showPolicy = true })
+    }
+}
+
+@Composable
+private fun ConsentScreen(onAccept: () -> Unit, onDecline: () -> Unit, onViewPolicy: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Header()
+        Spacer(Modifier.height(8.dp))
+        Text(
+            stringResource(R.string.consent_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            stringResource(R.string.consent_intro),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        WlCard {
+            DisclosureSection(R.string.consent_reads_title, R.string.consent_reads_body)
+            Spacer(Modifier.height(14.dp))
+            DisclosureSection(R.string.consent_why_title, R.string.consent_why_body)
+            Spacer(Modifier.height(14.dp))
+            DisclosureSection(R.string.consent_data_title, R.string.consent_data_body)
+        }
+        TextButton(onClick = onViewPolicy) {
+            Text(stringResource(R.string.view_privacy_policy))
+        }
+        Text(
+            stringResource(R.string.consent_ask),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(
+            onClick = onAccept,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(stringResource(R.string.consent_accept))
+        }
+        OutlinedButton(
+            onClick = onDecline,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(stringResource(R.string.consent_decline))
+        }
+    }
+}
+
+@Composable
+private fun DisclosureSection(title: Int, body: Int) {
+    Text(stringResource(title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(stringResource(body), style = MaterialTheme.typography.bodyMedium)
+}
+
+@Composable
+private fun PolicyScreen(onClose: () -> Unit) {
+    BackHandler(onBack = onClose)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.privacy_policy_title),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onClose) {
+                Text(stringResource(R.string.privacy_policy_close))
+            }
+        }
+        WlCard {
+            Text(stringResource(R.string.privacy_policy_text), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+fun MainScreen(onOpenPolicy: () -> Unit) {
     val context = LocalContext.current
     var isAccessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     // Bumped on resume so the "used today" lines re-read the usage written by the service.
@@ -78,7 +202,7 @@ fun MainScreen() {
             .padding(horizontal = 20.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Header()
+        Header(onInfo = onOpenPolicy)
         Spacer(Modifier.height(8.dp))
         ServiceStatus(isAccessibilityEnabled) {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -105,6 +229,14 @@ fun MainScreen() {
             serviceEnabled = isAccessibilityEnabled,
             refreshTick = refreshTick
         )
+        SectionLabel("Facebook")
+        FeatureCard(
+            surface = IgSurface.FB_REELS,
+            title = "Remove Reels",
+            description = "Watch the reel you opened, not the next one",
+            serviceEnabled = isAccessibilityEnabled,
+            refreshTick = refreshTick
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Everything runs on your device · v${BuildConfig.VERSION_NAME}",
@@ -113,11 +245,14 @@ fun MainScreen() {
             modifier = Modifier.fillMaxWidth(),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
+        TextButton(onClick = onOpenPolicy, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            Text(stringResource(R.string.privacy_and_permissions), style = MaterialTheme.typography.labelMedium)
+        }
     }
 }
 
 @Composable
-private fun Header() {
+private fun Header(onInfo: (() -> Unit)? = null) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Image(
             painter = painterResource(R.drawable.appicon),
@@ -127,7 +262,7 @@ private fun Header() {
                 .clip(RoundedCornerShape(12.dp))
         )
         Spacer(Modifier.width(14.dp))
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 "Whitelister",
                 style = MaterialTheme.typography.headlineSmall,
@@ -138,6 +273,15 @@ private fun Header() {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        if (onInfo != null) {
+            IconButton(onClick = onInfo) {
+                Icon(
+                    Icons.Outlined.Info,
+                    contentDescription = stringResource(R.string.privacy_and_permissions),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -182,7 +326,7 @@ private fun ServiceStatus(active: Boolean, onEnable: () -> Unit) {
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    if (active) "Your settings apply to Instagram" else "Turn on Whitelister in Accessibility settings",
+                    if (active) "Your settings apply to Instagram and Facebook" else "Turn on Whitelister in Accessibility settings",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -236,6 +380,7 @@ private fun FeatureCard(
                         IgSurface.REELS -> PreferencesManager.setReelsBlockingEnabled(context, value)
                         IgSurface.FEED -> PreferencesManager.setBlockFeedEnabled(context, value)
                         IgSurface.EXPLORE -> PreferencesManager.setBlockExploreEnabled(context, value)
+                        IgSurface.FB_REELS -> PreferencesManager.setFbReelsBlockingEnabled(context, value)
                     }
                 },
                 enabled = serviceEnabled
