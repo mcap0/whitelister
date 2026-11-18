@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.github.triplet.play")
 }
 
 android {
@@ -21,8 +22,8 @@ android {
         applicationId = "com.whitelister.app"
 minSdk = 23
         targetSdk = 36
-        versionCode = 38
-        versionName = "1.4.2"
+        versionCode = 39
+        versionName = "1.4.3"
         // dev is ahead of main (v1.3.0/vc34). Bump dev above main when
         // feature work starts again.
     }
@@ -63,6 +64,17 @@ minSdk = 23
         compose = true
         buildConfig = true
     }
+}
+
+// Google Play publishing (Gradle Play Publisher). The service-account key is a
+// local secret in keystore/ (git-ignored); without it the play tasks are disabled.
+val playCredentials = rootProject.file("keystore/play-service-account.json")
+play {
+    enabled.set(playCredentials.exists())
+    if (playCredentials.exists()) serviceAccountCredentials.set(playCredentials)
+    defaultToAppBundles.set(true)
+    track.set("internal")
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.DRAFT)
 }
 
 dependencies {

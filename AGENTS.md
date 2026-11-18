@@ -263,3 +263,14 @@ A reusable wrapper lives at `scripts/publish_dev.sh` (same logic, one command). 
 GITHUB_PAT=github_pat_xxx ./scripts/publish_dev.sh
 ```
 It refuses to run if not on `dev` or if `GITHUB_PAT` is unset.
+
+## Publishing to Google Play (Gradle Play Publisher)
+
+- JDK 21 lives in the conda env `whitelister` (system has only JDK 25, which Gradle 8.11 rejects):
+  `export JAVA_HOME=$HOME/App/miniforge3/envs/whitelister/lib/jvm ANDROID_HOME=/opt/android-sdk`
+- Plugin `com.github.triplet.play` 3.13.0 (4.x needs AGP 9). Defaults: App Bundle, track `internal`, release status `DRAFT`.
+- Credentials: service account `play-publisher@whitelister-512110.iam.gserviceaccount.com`, key at
+  `keystore/play-service-account.json` (git-ignored, NEVER commit). Without the key the play tasks are disabled.
+- Store listing source: `app/src/main/play/listings/en-US/` (title, short/full description, phone screenshots).
+- `./gradlew publishListing` uploads listing + screenshots; `./gradlew publishBundle` uploads the signed AAB.
+  **Never run either without the user's explicit go-ahead** — they change the live store.
