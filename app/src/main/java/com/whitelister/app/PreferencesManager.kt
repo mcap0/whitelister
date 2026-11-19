@@ -29,10 +29,11 @@ object PreferencesManager {
      * requires affirmative consent before the service reads any screen content, and the consent
      * must cover what is actually read: bump [CONSENT_VERSION] whenever the disclosure changes
      * materially so everyone is asked again. v1 (1.0.5, key "consent_accepted") covered Instagram
-     * only; v2 (1.5.0) adds Facebook, Block Feed/Explore and the daily usage meter.
+     * only; v2 (1.5.0) adds Facebook, Block Feed/Explore and the daily usage meter; v3 (1.6.1)
+     * adds the Facebook Home feed (Block Feed on Facebook).
      */
     private const val KEY_CONSENT_VERSION = "consent_version"
-    private const val CONSENT_VERSION = 2
+    private const val CONSENT_VERSION = 3
 
     /** Daily free minutes before a surface's block engages: "<surface>_free_minutes". */
     private const val SUFFIX_FREE_MINUTES = "_free_minutes"

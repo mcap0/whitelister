@@ -1,2 +1,2 @@
-New on Facebook: Remove Reels (Reels tab, and Reels or videos opened from the feed) and Block Feed (the Home feed stays at the top), each with its own switch and daily free time.
-Privacy: on first launch the app explains exactly what the Accessibility Service reads and asks for your consent. After updating, open Whitelister once and accept to keep your blocks active. The Privacy Policy is available in the app.
+New: a tip on Instagram's little-known Favorites feed (only the accounts you choose, newest first), with a short animation showing how to set it up.
+Privacy: the disclosure now also covers the Facebook Home feed. After updating, open Whitelister once and accept again to keep your blocks active.
