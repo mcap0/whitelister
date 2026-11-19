@@ -15,7 +15,7 @@ and https://support.google.com/googleplay/android-developer/answer/10144311 (Use
   stored or sent; only settings and today's minutes are saved locally), how to revoke it.
 - Affirmative consent: "I agree" / "Decline". Decline closes the app; Back/Home are not consent;
   the screen comes back on every launch until accepted. Consent is versioned
-  (`PreferencesManager.CONSENT_VERSION`, currently 2 = Facebook added): bump it whenever what the
+  (`PreferencesManager.CONSENT_VERSION`, currently 3 = Facebook Home feed, v1.6.1): bump it whenever what the
   service reads changes, so everyone is asked again.
 - The accessibility service reads nothing before consent (`onAccessibilityEvent` returns early),
   even if it was switched on from Android Settings first, and its runtime scope is limited to
@@ -56,6 +56,12 @@ Facebook Remove Reels, v1.6.0 Facebook Block Feed) — "If you change how your a
    4. the non-consent path: "Decline" closes the app, reopening it shows the disclosure again;
    5. a core feature: e.g. open a Reel in Instagram or Facebook, swipe to the next one, Back is
       performed (add captions, the UI alone does not explain it).
+
+Declaration video for v1.6.0 (recorded 19 Nov 2026 on an emulator with a test Instagram
+account, captioned, 1080x1920, 88 s): `~/Videos/whitelister/whitelister_declaration_v1.6.0.mp4`
+(not in git), public on YouTube: https://youtube.com/shorts/bEAZM6H-rjY (paste this link in the
+declaration). Covers steps 1–5 above: disclosure, Decline closes the app, reopen shows it again,
+I agree, Enable → Accessibility → allow, then Block Feed and Remove Reels on Instagram.
 
 ## Notes / residual risk
 - Google's 2026 policy tightening favors apps whose core purpose is serving a disability.

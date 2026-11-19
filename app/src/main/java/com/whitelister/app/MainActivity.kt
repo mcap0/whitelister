@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -229,6 +230,7 @@ fun MainScreen(onOpenPolicy: () -> Unit) {
             serviceEnabled = isAccessibilityEnabled,
             refreshTick = refreshTick
         )
+        FavoritesTipCard()
         SectionLabel("Facebook")
         FeatureCard(
             surface = IgSurface.FB_REELS,
@@ -343,6 +345,50 @@ private fun ServiceStatus(active: Boolean, onEnable: () -> Unit) {
                 Button(onClick = onEnable, shape = RoundedCornerShape(12.dp)) {
                     Text("Enable")
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Tip: Instagram's Favorites feed (only the accounts you pick, newest first), with a drawn
+ * walkthrough ([FavoritesAnimation]) shown on request. Purely informational, no service logic.
+ */
+@Composable
+private fun FavoritesTipCard() {
+    var open by rememberSaveable { mutableStateOf(false) }
+    WlCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Star,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Tip: see only who you choose", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "Instagram has a Favorites feed with only the accounts you pick, newest first. Few people know it exists.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        TextButton(onClick = { open = !open }, modifier = Modifier.align(Alignment.End)) {
+            Text(if (open) "Hide" else "Show me how")
+        }
+        AnimatedVisibility(visible = open) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                FavoritesAnimation()
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "You can also open a profile, tap Following and choose Add to Favorites. " +
+                        "Accounts are never told they were added.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

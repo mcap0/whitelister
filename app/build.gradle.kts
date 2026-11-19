@@ -22,8 +22,8 @@ android {
         applicationId = "com.whitelister.app"
 minSdk = 23
         targetSdk = 36
-        versionCode = 41
-        versionName = "1.6.0"
+        versionCode = 42
+        versionName = "1.6.1"
     }
 
     signingConfigs {
