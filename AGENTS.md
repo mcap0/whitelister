@@ -11,6 +11,7 @@ Android app to reclaim control over social media. Starts with Instagram; more ap
 5. Daily free time (v1.4.0) — per surface (Reels/Feed/Explore) the block engages only after N minutes/day (`PreferencesManager.shouldBlock`). A 1s sampler (`usageTick`) credits the foreground surface while IG is the active window. 0 = always block (default).
 3. Block Feed — when active, the Home feed cannot be scrolled: any scroll-down is counteracted by pressing the bottom-nav Home tab, which snaps the feed back to the top instantly (accepts pull-to-refresh). **WORKING (dev, uncommitted when this line was written).**
 6. **Facebook — Remove Reels (v1.5.0)** — same rule as Instagram's feature 1 on Facebook (`com.facebook.katana`): a reel can be watched, the first swipe to another reel issues BACK. Covers the Reels tab and the immersive viewer (reels/videos opened from the feed, profiles, search…). Own toggle + daily free time (`IgSurface.FB_REELS`). Lives in `FacebookReelsBlocker.kt`; see "Facebook Remove Reels — How It Works". **WORKING on device (FB 588.0.0.42.55, Pixel 9a, Android 16).**
+7. **Facebook — Block Feed (v1.6.0)** — Facebook's Home feed stays at the top (composer + Stories): a scroll down is scrolled back with `ACTION_SCROLL_BACKWARD` (no reload). Own toggle + daily free time (`IgSurface.FB_FEED`). Lives in `FacebookFeedBlocker.kt`; see "Facebook Block Feed — How It Works". **WORKING on device (FB 588.0.0.42.55, Pixel 9a).**
 
 ## Architecture
 
@@ -77,6 +78,7 @@ whitelister/
 │   │   │   ├── MainActivity.kt                    # Compose UI for settings
 │   │   │   ├── WhitelistAccessibilityService.kt   # Core service — reels blocking + Lock Home Feed (both working)
 │   │   │   ├── FacebookReelsBlocker.kt            # Facebook Remove Reels (routed from the service)
+│   │   │   ├── FacebookFeedBlocker.kt             # Facebook Block Feed (routed from the service)
 │   │   │   ├── PreferencesManager.kt              # SharedPreferences wrapper
 │   │   │   └── ui/theme/
 │   │   │       ├── Color.kt
@@ -191,6 +193,21 @@ Auto-advance (FB plays the next reel when one ends, "Prossimo video") is a page 
 **Validated on device (Pixel 9a):** Reels tab first swipe blocked (×4, incl. after reopening with the pager moved on — no false BACK while idle); immersive viewer from the feed's Reels carousel blocked, also when flicked 0.5s after opening; backward swipe blocked; swipe-down on the first reel and the comment sheet (open + scroll) never trigger; photo viewer, Home feed and carousel scrolls ignored; free-time path allows swipes; Instagram Reels blocking unchanged (`SWIPE 0->1, issuing BACK`). Stories were not tested (opening friends' stories notifies them) — they navigate horizontally (`dy = 0`) and have no right rail.
 
 **How to debug:** `adb logcat -s WhitelistFB` (debug builds): `reel pager recognised (window|content|scroll)`, `reel scroll from=.. to=.. dy=.. baseline=..`, `SWIPE (swipe a..b dy=..) -> BACK`, `SWIPE (settled on reel N, was M) -> BACK`. `adb shell am broadcast -a com.whitelister.app.DUMP` also dumps the full Facebook tree (all nodes, `H` = not visible) under the same tag.
+
+## Facebook Block Feed — How It Works (v1.6.0)
+
+**Goal:** same rule as Instagram's Block Feed on `com.facebook.katana`. `FacebookFeedBlocker` gets every Facebook event after `FacebookReelsBlocker` (routed in `onAccessibilityEvent`); it returns immediately when its toggle is off.
+
+- **Feed recognition:** the Home feed is the only Facebook surface that keeps a real id, `android:id/list` (verified: Reels/Friends/Marketplace/Notifications/Profile tabs, group pages opened from the feed never emit scrolls from it). Only scroll events whose source is that list (visible, ≥ 80% width, ≥ 40% height) are considered.
+- **Home tab:** the main tabs are `android.app.ActionBar$Tab` nodes (cd "Home, tab 1 su 6", localized — not used); Home = the leftmost one, must be `isSelected`. **Facebook removes the tab bar (and top bar) from the tree while the feed is scrolled down**, so the last state seen while the bar was shown is cached (`homeSelectedWhenLastSeen`); `null` (never seen, e.g. the service restarted mid-feed) trusts the list id.
+- **At top** = the list does not offer `ACTION_SCROLL_BACKWARD`.
+- **Snap:** `ACTION_SCROLL_BACKWARD` every 40ms until refused (2–10 steps for a normal scroll); user scrolls during the snap reset the step budget. If the user insists (3 pushes / 1.2s) or the list refuses/gets stuck, the Home tab is tapped — but only if the tab bar is shown (it usually is not while scrolled), otherwise the scroll-back simply continues. Tab taps are rate-limited to one per 2s (they may reload).
+- **Reopen:** on `TYPE_WINDOW_STATE_CHANGED`, 700ms later a feed restored mid-way is scrolled back (`opened mid-feed`).
+- **Usage meter:** FB time is credited to `FB_REELS` when a reel pager is on screen, else `FB_FEED` while the Home feed is shown; the ticker runs while any FB feature is on.
+
+**Validated on device:** single scroll → back to top in 2 steps, no reload; 6 rapid flings → back at top; other tabs + a group page scroll freely; free time allows scrolling (`free time left, not blocking`); reopen mid-feed → snapped; FB Remove Reels still blocks (`SWIPE 1..2 -> BACK`).
+
+**How to debug:** `adb logcat -s WhitelistFB | grep FeedBlock`: `feed scrolled (dy=..) -> scrolling back to top`, `snap done -- ...`, `not on Home tab, skip`, `opened mid-feed`, `tapped Home tab`, `Home tab not shown, no tap`.
 
 ## Lock Home Feed — How It Works (Working, v1.1.1)
 

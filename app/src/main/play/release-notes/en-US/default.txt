@@ -1,2 +1,2 @@
-New: Remove Reels now works on Facebook too (Reels tab and Reels or videos opened from the feed), with its own switch and daily free time.
-Privacy: the app again explains on first launch exactly what the Accessibility Service reads, and asks for your consent. After updating, open Whitelister once and accept to keep your blocks active. The Privacy Policy is available in the app.
+New on Facebook: Remove Reels (Reels tab, and Reels or videos opened from the feed) and Block Feed (the Home feed stays at the top), each with its own switch and daily free time.
+Privacy: on first launch the app explains exactly what the Accessibility Service reads and asks for your consent. After updating, open Whitelister once and accept to keep your blocks active. The Privacy Policy is available in the app.

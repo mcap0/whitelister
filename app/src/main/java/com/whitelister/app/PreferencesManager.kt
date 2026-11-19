@@ -6,13 +6,14 @@ import java.util.Calendar
 
 /**
  * The surfaces a feature can block and whose daily usage is metered: Instagram's (REELS, FEED,
- * EXPLORE) and Facebook's (FB_REELS).
+ * EXPLORE) and Facebook's (FB_REELS, FB_FEED).
  */
 enum class IgSurface(val key: String) {
     REELS("reels"),
     FEED("feed"),
     EXPLORE("explore"),
-    FB_REELS("fb_reels")
+    FB_REELS("fb_reels"),
+    FB_FEED("fb_feed")
 }
 
 object PreferencesManager {
@@ -21,6 +22,7 @@ object PreferencesManager {
     private const val KEY_BLOCK_FEED = "block_feed_enabled"
     private const val KEY_BLOCK_EXPLORE = "block_explore_enabled"
     private const val KEY_FB_REELS_BLOCKING = "fb_reels_blocking_enabled"
+    private const val KEY_FB_BLOCK_FEED = "fb_block_feed_enabled"
 
     /**
      * Version of the in-app accessibility disclosure the user accepted (0 = never). Google Play
@@ -80,11 +82,23 @@ object PreferencesManager {
         prefs(context).edit().putBoolean(KEY_FB_REELS_BLOCKING, enabled).apply()
     }
 
+    fun isFbBlockFeedEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_FB_BLOCK_FEED, false)
+
+    fun setFbBlockFeedEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_FB_BLOCK_FEED, enabled).apply()
+    }
+
+    /** True when any Facebook feature is on (Facebook is handled and metered only then). */
+    fun isAnyFacebookEnabled(context: Context): Boolean =
+        isFbReelsBlockingEnabled(context) || isFbBlockFeedEnabled(context)
+
     fun isEnabled(context: Context, surface: IgSurface): Boolean = when (surface) {
         IgSurface.REELS -> isReelsBlockingEnabled(context)
         IgSurface.FEED -> isBlockFeedEnabled(context)
         IgSurface.EXPLORE -> isBlockExploreEnabled(context)
         IgSurface.FB_REELS -> isFbReelsBlockingEnabled(context)
+        IgSurface.FB_FEED -> isFbBlockFeedEnabled(context)
     }
 
     fun getFreeMinutes(context: Context, surface: IgSurface): Int =
