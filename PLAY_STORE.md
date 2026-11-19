@@ -1,4 +1,4 @@
-# Play Store Submission — Accessibility Declaration (v1.5.0)
+# Play Store Submission — Accessibility Declaration (v1.6.0)
 
 Whitelister uses `AccessibilityService`. It is NOT declared as an accessibility tool
 (`isAccessibilityTool` is not set), so Google Play requires: an in-app prominent disclosure with
@@ -30,8 +30,8 @@ and https://support.google.com/googleplay/android-developer/answer/10144311 (Use
   v1.5.0 — keep it when rewriting `MainActivity`.
 
 ## Accessibility services declaration — answers to enter in Play Console
-Resubmit the declaration with every release that changes how the API is used (v1.5.0 adds
-Facebook) — "If you change how your app uses this API, you must submit the form again".
+Resubmit the declaration with every release that changes how the API is used (v1.5.0 added
+Facebook Remove Reels, v1.6.0 Facebook Block Feed) — "If you change how your app uses this API, you must submit the form again".
 1. Why does your app need to use the Accessibility Services API?
    - Select: **App functionality**
 2. Does your app collect or share personal or sensitive data through accessibility capabilities?
@@ -42,8 +42,8 @@ Facebook) — "If you change how your app uses this API, you must submit the for
    - "Whitelister is a digital-wellbeing tool. At the user's request it reads the on-screen UI of
      Instagram and Facebook (only those two apps) to recognise endless-scroll surfaces and apply
      fixed, user-selected rules: Remove Reels (Instagram and Facebook) — when the user swipes from
-     the Reel they opened to another one, the app performs a Back action; Block Feed and Block
-     Explore (Instagram) — when the Home feed or Explore grid is scrolled, the app scrolls it back
+     the Reel they opened to another one, the app performs a Back action; Block Feed (Instagram and
+     Facebook) and Block Explore (Instagram) — when the Home feed or Explore grid is scrolled, the app scrolls it back
      to the top (or taps the Home/Search tab). An optional daily free time lets the user allow N
      minutes per day before a block starts. All processing is on-device; no data is collected."
    - These are deterministic, rule-based actions ("if the user swipes to another Reel, go back"),
@@ -112,7 +112,7 @@ filled in / checked with real numbers before submitting. Do not invent tester da
 > became faster than the user's scroll, and if the user insists it falls back to tapping
 > Home/Search; added Block Explore; added a per-feature daily free time (5–60 minutes,
 > resets at midnight); and a cleaner interface with usage progress shown for each feature.
-> Version 1.5.0 extended Remove Reels to Facebook [say whether testers asked for it — confirm]
+> Version 1.5.0 extended Remove Reels to Facebook and 1.6.0 Block Feed [say whether testers asked for it — confirm]
 > and restored the first-launch accessibility disclosure and in-app privacy policy.
 
 **8. How did you decide that your app is ready for production?**

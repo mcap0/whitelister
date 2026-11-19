@@ -9,6 +9,7 @@ On Instagram:
 • Block Explore: no endless suggestions. Search still works, and so do the profiles you open from it.
 On Facebook:
 • Remove Reels: the same rule for Facebook Reels. Watch the Reel or video you opened, from the Reels tab or from your feed, but scroll to the next one and Whitelister takes you back.
+• Block Feed: the Facebook Home feed stays at the top too, with your Stories. Groups, profiles and pages still scroll normally.
 And for every feature:
 • Daily free time: not ready to quit cold turkey? Give each feature a few free minutes per day (5 to 60). The block kicks in only once today's time is used up, and it resets at midnight.
 
@@ -27,7 +28,7 @@ PRIVACY FIRST
 • No ads, no analytics, no account.
 
 HOW IT WORKS
-Whitelister uses Android's Accessibility Service to recognise when you are scrolling Reels, the Instagram Home feed or Explore, and to bring you back. It reads only Instagram and Facebook, only for the features you turned on, and only on your device. The first time you open the app, it explains exactly what the service reads and asks for your consent; then you enable the service in Android Settings.
+Whitelister uses Android's Accessibility Service to recognise when you are scrolling Reels, the Home feed or Instagram's Explore, and to bring you back. It reads only Instagram and Facebook, only for the features you turned on, and only on your device. The first time you open the app, it explains exactly what the service reads and asks for your consent; then you enable the service in Android Settings.
 
 COMING SOON
 • Feed whitelisting: let your brain see only the accounts you choose, without suggested content.

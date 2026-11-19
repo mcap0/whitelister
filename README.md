@@ -19,6 +19,9 @@ Each feature can allow N free minutes per day (5–60). The block engages only o
 ### Facebook: Remove Reels — New in 1.5.0
 The same rule on Facebook: watch the reel you opened, the first swipe to another one is undone with a back action. Works on the Reels tab and in the full-screen viewer that opens reels and videos from the feed, profiles and search. Has its own switch and daily free time.
 
+### Facebook: Block Feed — New in 1.6.0
+The Facebook Home feed stays at the top (composer and Stories). A scroll down is scrolled straight back without reloading the feed; groups, profiles, pages and the other tabs scroll normally. Own switch and daily free time.
+
 ## How It Works
 
 Whitelister uses Android's **AccessibilityService API** to intercept Instagram's UI events and modify behavior at runtime. No root required.

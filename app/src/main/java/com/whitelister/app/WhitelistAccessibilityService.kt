@@ -216,6 +216,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
 
     // --- Facebook ---
     private val facebook = FacebookReelsBlocker(this)
+    private val facebookFeed = FacebookFeedBlocker(this)
 
     // --- Usage meter (daily free time per surface) ---
     private var usageTickerRunning = false
@@ -271,8 +272,9 @@ class WhitelistAccessibilityService : AccessibilityService() {
         if (pkg == FacebookReelsBlocker.PACKAGE) {
             // Facebook is only metered (and handled at all) while its feature is on, so users who
             // only use the Instagram features pay nothing while Facebook is open.
-            if (PreferencesManager.isEnabled(this, IgSurface.FB_REELS)) ensureUsageTicker()
+            if (PreferencesManager.isAnyFacebookEnabled(this)) ensureUsageTicker()
             facebook.onEvent(event)
+            facebookFeed.onEvent(event)
             return
         }
         if (pkg != "com.instagram.android") return
@@ -1092,7 +1094,7 @@ class WhitelistAccessibilityService : AccessibilityService() {
         val root = getRootInActiveWindow()
         val pkg = root?.packageName?.toString()
         val metered = pkg == "com.instagram.android" ||
-                (pkg == FacebookReelsBlocker.PACKAGE && PreferencesManager.isEnabled(this, IgSurface.FB_REELS))
+                (pkg == FacebookReelsBlocker.PACKAGE && PreferencesManager.isAnyFacebookEnabled(this))
         if (root != null && !metered) {
             if (BuildConfig.DEBUG) Log.d(TAG, "usage: ticker stopped, foreground=$pkg")
             root.recycle()
@@ -1104,6 +1106,8 @@ class WhitelistAccessibilityService : AccessibilityService() {
             try {
                 val surface = if (pkg == FacebookReelsBlocker.PACKAGE) {
                     facebook.currentSurface(root)
+                        ?: if (PreferencesManager.isEnabled(this, IgSurface.FB_FEED) &&
+                            facebookFeed.isHomeFeedShown(root)) IgSurface.FB_FEED else null
                 } else {
                     currentSurface(root)
                 }

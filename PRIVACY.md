@@ -1,6 +1,6 @@
 # Whitelister Privacy Policy
 
-Last updated: 18 November 2026
+Last updated: 19 November 2026
 
 Whitelister is an open-source Android app that helps you spend less time on Instagram and
 Facebook by blocking the endless-scroll features you choose to block. This policy explains what
@@ -22,7 +22,7 @@ Only to provide the features you turn on:
 
 - **Remove Reels** (Instagram and Facebook): recognise that you are watching a Reel and perform a
   back action when you swipe to another one.
-- **Block Feed** (Instagram): recognise that the Home feed was scrolled below the Stories and
+- **Block Feed** (Instagram and Facebook): recognise that the Home feed was scrolled below the Stories and
   scroll it back to the top, or tap the Home tab.
 - **Block Explore** (Instagram): recognise that the Explore grid was scrolled and scroll it back
   to the top, or tap the Search tab.

@@ -237,6 +237,13 @@ fun MainScreen(onOpenPolicy: () -> Unit) {
             serviceEnabled = isAccessibilityEnabled,
             refreshTick = refreshTick
         )
+        FeatureCard(
+            surface = IgSurface.FB_FEED,
+            title = "Block Feed",
+            description = "The Home feed stays at the top, stories only",
+            serviceEnabled = isAccessibilityEnabled,
+            refreshTick = refreshTick
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             text = "Everything runs on your device · v${BuildConfig.VERSION_NAME}",
@@ -381,6 +388,7 @@ private fun FeatureCard(
                         IgSurface.FEED -> PreferencesManager.setBlockFeedEnabled(context, value)
                         IgSurface.EXPLORE -> PreferencesManager.setBlockExploreEnabled(context, value)
                         IgSurface.FB_REELS -> PreferencesManager.setFbReelsBlockingEnabled(context, value)
+                        IgSurface.FB_FEED -> PreferencesManager.setFbBlockFeedEnabled(context, value)
                     }
                 },
                 enabled = serviceEnabled
