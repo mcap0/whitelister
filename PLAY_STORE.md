@@ -10,9 +10,10 @@ and https://support.google.com/googleplay/android-developer/answer/10144311 (Use
 ## In-app disclosure, consent and privacy policy (implemented, v1.5.0)
 - First-launch disclosure screen ("Before you start"): what the service reads (Instagram and
   Facebook screen content: layout, view ids, visible text such as account names and captions;
-  no other app), why (Remove Reels on Instagram and Facebook, Block Feed, Block Explore, daily
-  usage minutes for the free time), what happens to it (processed in memory on-device, never
-  stored or sent; only settings and today's minutes are saved locally), how to revoke it.
+  no other app), why (Remove Reels on Instagram and Facebook, Block Feed, Block Explore, usage
+  minutes for the free time), what happens to it (processed in memory on-device, never
+  stored or sent; only settings, the free minutes used and when the current block started are
+  saved locally), how to revoke it.
 - Affirmative consent: "I agree" / "Decline". Decline closes the app; Back/Home are not consent;
   the screen comes back on every launch until accepted. Consent is versioned
   (`PreferencesManager.CONSENT_VERSION`, currently 3 = Facebook Home feed, v1.6.1): bump it whenever what the
@@ -44,8 +45,8 @@ Facebook Remove Reels, v1.6.0 Facebook Block Feed) — "If you change how your a
      fixed, user-selected rules: Remove Reels (Instagram and Facebook) — when the user swipes from
      the Reel they opened to another one, the app performs a Back action; Block Feed (Instagram and
      Facebook) and Block Explore (Instagram) — when the Home feed or Explore grid is scrolled, the app scrolls it back
-     to the top (or taps the Home/Search tab). An optional daily free time lets the user allow N
-     minutes per day before a block starts. All processing is on-device; no data is collected."
+     to the top (or taps the Home/Search tab). An optional free time lets the user allow N
+     minutes before a block starts; the block then lasts 1–24 hours (user-selected). All processing is on-device; no data is collected."
    - These are deterministic, rule-based actions ("if the user swipes to another Reel, go back"),
      which the policy explicitly allows; nothing is decided autonomously.
 4. Video (required): a link (e.g. unlisted YouTube) showing, in order —
@@ -105,8 +106,8 @@ filled in / checked with real numbers before submitting. Do not invent tester da
 > Whitelister removes the endless-scroll mechanics from Instagram and Facebook without making
 > them unusable. You can still watch the Reel you opened, but not swipe to the next one; the
 > Home feed stays at the Stories; Explore suggestions are blocked while search keeps
-> working. A daily free-time option lets users decide how many minutes per day they allow
-> themselves. Everything runs on-device, with no internet permission, no data collection,
+> working. A free-time option lets users decide how many minutes they allow themselves
+> and how long the block lasts afterwards (1–24 hours). Everything runs on-device, with no internet permission, no data collection,
 > no ads and no account.
 
 **6. How many installs do you expect your app to have in your first year?**

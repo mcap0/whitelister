@@ -13,14 +13,14 @@ Keeps the Instagram Home feed at the top (Stories only). Any scroll down is scro
 ### Block Explore — New in 1.4.0
 Same snap-back on the Search/Explore suggestions grid. Searching and profiles opened from search stay free.
 
-### Daily free time — New in 1.4.0
-Each feature can allow N free minutes per day (5–60). The block engages only once today's free time on that surface is used up; usage resets at midnight. "None" = always blocked (default, same behavior as before).
+### Free time — New in 1.4.0, block duration in 1.7.0
+Each feature can allow N free minutes (5–60). The block engages only once the free time on that surface is used up, and lasts for the chosen block duration (1–24 hours, default 24), timed from that moment; then the free time is full again. Each surface keeps its own timer. "None" = always blocked (default, same behavior as before).
 
 ### Facebook: Remove Reels — New in 1.5.0
-The same rule on Facebook: watch the reel you opened, the first swipe to another one is undone with a back action. Works on the Reels tab and in the full-screen viewer that opens reels and videos from the feed, profiles and search. Has its own switch and daily free time.
+The same rule on Facebook: watch the reel you opened, the first swipe to another one is undone with a back action. Works on the Reels tab and in the full-screen viewer that opens reels and videos from the feed, profiles and search. Has its own switch and free time.
 
 ### Facebook: Block Feed — New in 1.6.0
-The Facebook Home feed stays at the top (composer and Stories). A scroll down is scrolled straight back without reloading the feed; groups, profiles, pages and the other tabs scroll normally. Own switch and daily free time.
+The Facebook Home feed stays at the top (composer and Stories). A scroll down is scrolled straight back without reloading the feed; groups, profiles, pages and the other tabs scroll normally. Own switch and free time.
 
 ## How It Works
 
@@ -35,7 +35,7 @@ Whitelister uses Android's **AccessibilityService API** to intercept Instagram's
 2. Install the APK on your Android device (API 30+ / Android 11+)
 3. Open Whitelister → Accept the consent → Tap "Enable Service"
 4. You'll be taken to Android Settings → Accessibility → Whitelister → Toggle ON
-5. Go back to Whitelister → Toggle "Remove Reels", "Block Feed" and/or "Block Explore" ON (optionally pick a daily free time)
+5. Go back to Whitelister → Toggle "Remove Reels", "Block Feed" and/or "Block Explore" ON (optionally pick a free time and a block duration)
 6. Open Instagram
 
 ## Requirements

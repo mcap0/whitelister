@@ -180,7 +180,7 @@ private fun PolicyScreen(onClose: () -> Unit) {
 fun MainScreen(onOpenPolicy: () -> Unit) {
     val context = LocalContext.current
     var isAccessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
-    // Bumped on resume so the "used today" lines re-read the usage written by the service.
+    // Bumped on resume so the usage lines re-read the usage written by the service.
     var refreshTick by remember { mutableIntStateOf(0) }
     var windowHours by remember { mutableIntStateOf(PreferencesManager.getWindowHours(context)) }
 

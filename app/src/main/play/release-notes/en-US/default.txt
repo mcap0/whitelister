@@ -1,2 +1,1 @@
-New: a tip on Instagram's little-known Favorites feed (only the accounts you choose, newest first), with a short animation showing how to set it up.
-Privacy: the disclosure now also covers the Facebook Home feed. After updating, open Whitelister once and accept again to keep your blocks active.
+New: choose how long a block lasts once your free time runs out, from 1 to 24 hours. The timer starts when the free time is used up, then your free minutes are back. Each feature shows when its block ends.
