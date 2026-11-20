@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlin.math.roundToInt
 import com.whitelister.app.ui.theme.WhitelisterTheme
 
 class MainActivity : ComponentActivity() {
@@ -181,6 +182,7 @@ fun MainScreen(onOpenPolicy: () -> Unit) {
     var isAccessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     // Bumped on resume so the "used today" lines re-read the usage written by the service.
     var refreshTick by remember { mutableIntStateOf(0) }
+    var windowHours by remember { mutableIntStateOf(PreferencesManager.getWindowHours(context)) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -208,27 +210,39 @@ fun MainScreen(onOpenPolicy: () -> Unit) {
         ServiceStatus(isAccessibilityEnabled) {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        WindowCard(
+            hours = windowHours,
+            serviceEnabled = isAccessibilityEnabled,
+            onChange = { h ->
+                windowHours = h
+                PreferencesManager.setWindowHours(context, h)
+                refreshTick++
+            }
+        )
         SectionLabel("Instagram")
         FeatureCard(
             surface = IgSurface.REELS,
             title = "Remove Reels",
             description = "Watch the reel you opened, not the next one",
             serviceEnabled = isAccessibilityEnabled,
-            refreshTick = refreshTick
+            refreshTick = refreshTick,
+            windowHours = windowHours
         )
         FeatureCard(
             surface = IgSurface.FEED,
             title = "Block Feed",
             description = "The Home feed stays at the top, stories only",
             serviceEnabled = isAccessibilityEnabled,
-            refreshTick = refreshTick
+            refreshTick = refreshTick,
+            windowHours = windowHours
         )
         FeatureCard(
             surface = IgSurface.EXPLORE,
             title = "Block Explore",
             description = "No endless suggestions. Search still works",
             serviceEnabled = isAccessibilityEnabled,
-            refreshTick = refreshTick
+            refreshTick = refreshTick,
+            windowHours = windowHours
         )
         FavoritesTipCard()
         SectionLabel("Facebook")
@@ -237,14 +251,16 @@ fun MainScreen(onOpenPolicy: () -> Unit) {
             title = "Remove Reels",
             description = "Watch the reel you opened, not the next one",
             serviceEnabled = isAccessibilityEnabled,
-            refreshTick = refreshTick
+            refreshTick = refreshTick,
+            windowHours = windowHours
         )
         FeatureCard(
             surface = IgSurface.FB_FEED,
             title = "Block Feed",
             description = "The Home feed stays at the top, stories only",
             serviceEnabled = isAccessibilityEnabled,
-            refreshTick = refreshTick
+            refreshTick = refreshTick,
+            windowHours = windowHours
         )
         Spacer(Modifier.height(8.dp))
         Text(
@@ -404,13 +420,17 @@ private fun FeatureCard(
     title: String,
     description: String,
     serviceEnabled: Boolean,
-    refreshTick: Int
+    refreshTick: Int,
+    windowHours: Int
 ) {
     val context = LocalContext.current
     var enabled by remember { mutableStateOf(PreferencesManager.isEnabled(context, surface)) }
     var freeMinutes by remember { mutableIntStateOf(PreferencesManager.getFreeMinutes(context, surface)) }
-    val usedMinutes = remember(refreshTick) {
+    val usedMinutes = remember(refreshTick, windowHours) {
         (PreferencesManager.getUsedMsToday(context, surface) / 60_000L).toInt()
+    }
+    val blockEndsAt = remember(refreshTick, windowHours, freeMinutes) {
+        PreferencesManager.blockEndsAtMillis(context, surface)
     }
 
     WlCard {
@@ -446,7 +466,7 @@ private fun FeatureCard(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Free time per day",
+                    "Free time, then blocked for " + hoursLabel(windowHours),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -482,7 +502,7 @@ private fun FeatureCard(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = usageLine(freeMinutes, usedMinutes),
+                    text = usageLine(context, freeMinutes, usedMinutes, blockEndsAt),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -491,11 +511,68 @@ private fun FeatureCard(
     }
 }
 
-private fun usageLine(freeMinutes: Int, usedMinutes: Int): String = when {
-    freeMinutes == 0 -> "Always blocked · $usedMinutes min today"
-    usedMinutes >= freeMinutes -> "Free time used up · blocked for today"
-    else -> "$usedMinutes of $freeMinutes min used · blocks after ${freeMinutes - usedMinutes} more"
+private fun hoursLabel(hours: Int): String = if (hours == 1) "1 hour" else "$hours hours"
+
+private fun usageLine(context: Context, freeMinutes: Int, usedMinutes: Int, blockEndsAt: Long): String =
+    when {
+        freeMinutes == 0 -> "Always blocked"
+        blockEndsAt > 0 -> "Free time used up · blocked until " + formatEnd(context, blockEndsAt)
+        else -> "$usedMinutes of $freeMinutes min used · blocks after ${freeMinutes - usedMinutes} more"
+    }
+
+/** "18:30", or "tomorrow 18:30" when the block ends on a later day. */
+private fun formatEnd(context: Context, at: Long): String {
+    val time = android.text.format.DateFormat.getTimeFormat(context).format(java.util.Date(at))
+    val end = java.util.Calendar.getInstance().apply { timeInMillis = at }
+    val now = java.util.Calendar.getInstance()
+    return if (end.get(java.util.Calendar.DAY_OF_YEAR) != now.get(java.util.Calendar.DAY_OF_YEAR)) "tomorrow $time" else time
 }
+
+/**
+ * How long a block lasts once a feature's free time runs out: 1..24 hours (default 24), timed
+ * from the moment the free time is used up; then the free time is full again.
+ */
+@Composable
+private fun WindowCard(hours: Int, serviceEnabled: Boolean, onChange: (Int) -> Unit) {
+    var sliderValue by remember(hours) { mutableFloatStateOf(hours.toFloat()) }
+    val shown = sliderValue.roundToInt()
+    WlCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Block duration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "How long a block lasts once the free time runs out",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                hoursLabel(shown),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Slider(
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = { onChange(sliderValue.roundToInt()) },
+            valueRange = PreferencesManager.MIN_WINDOW_HOURS.toFloat()..PreferencesManager.MAX_WINDOW_HOURS.toFloat(),
+            steps = PreferencesManager.MAX_WINDOW_HOURS - PreferencesManager.MIN_WINDOW_HOURS - 1,
+            enabled = serviceEnabled
+        )
+        Text(
+            text = windowDetail(shown),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun windowDetail(hours: Int): String =
+    "The timer starts when the free time is used up. After ${hoursLabel(hours)} the free time is back"
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val service = ComponentName(context, WhitelistAccessibilityService::class.java)
