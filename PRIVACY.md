@@ -1,6 +1,6 @@
 # Whitelister Privacy Policy
 
-Last updated: 19 November 2026
+Last updated: 20 November 2026
 
 Whitelister is an open-source Android app that helps you spend less time on Instagram and
 Facebook by blocking the endless-scroll features you choose to block. This policy explains what
@@ -26,16 +26,17 @@ Only to provide the features you turn on:
   scroll it back to the top, or tap the Home tab.
 - **Block Explore** (Instagram): recognise that the Explore grid was scrolled and scroll it back
   to the top, or tap the Search tab.
-- **Daily free time**: count the minutes you spend on each of these screens each day, so a block
-  starts only after the free minutes you chose.
+- **Free time**: count the minutes you spend on each of these screens, so a block starts only
+  after the free minutes you chose and lasts for the block duration you chose (1 to 24 hours).
 
 The screen content is processed in memory, on your device, at the moment it is shown. It is never
 recorded, stored or transmitted.
 
 ## Data stored on your device
-Only your feature settings (on/off and daily free minutes), whether you accepted the in-app
-accessibility disclosure, and, for each blockable screen, the minutes used today. These values
-stay in the app's private storage on your device and the minutes are replaced every day. If
+Only your feature settings (on/off, free minutes and block duration), whether you accepted the
+in-app accessibility disclosure, and, for each blockable screen, the minutes of free time used and
+the time its current block started. These values stay in the app's private storage on your device
+and the minutes are reset when each block ends. If
 Android backup is turned on, Android may include these settings in your device backup, which is
 managed by Google under your backup settings, not by the developer.
 
